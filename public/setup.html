@@ -1,87 +1,54 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Prokip Setup</title>
-  <link rel="stylesheet" href="/public/style.css">
+  <title>Setup Store</title>
+  <link rel="stylesheet" href="/public/styles.css">
 </head>
 <body>
+
+<header class="header">
+  <div class="logo">Prokip</div>
+</header>
+
+<main class="page">
   <div class="container">
-    <h1>Choose Product Setup Method</h1>
-    <p class="helper">Choose how you’d like to set up products for syncing.</p>
+    <h1>Choose Product Setup</h1>
+    <p>Select how products should sync</p>
 
-    <div class="card">
-      <label>
-        <input type="radio" name="choice" value="pull"> Use products from my online store (Pull from store → Prokip)
-      </label><br><br>
-      <label>
-        <input type="radio" name="choice" value="push"> Use products from Prokip (Push to store)
-      </label><br><br>
-      <button onclick="saveChoice()">Continue Setup</button>
-    </div>
+    <form id="setupForm">
+      <input type="hidden" id="platform">
 
-    <div id="flow" class="card"></div>
+      <label class="radio">
+        <input type="radio" name="choice" value="pull" required>
+        Use products from my online store
+      </label>
+
+      <label class="radio">
+        <input type="radio" name="choice" value="push">
+        Use products from Prokip
+      </label>
+
+      <button type="submit">Continue</button>
+    </form>
   </div>
+</main>
 
-  <script>
-    // Same script as before, with small UI tweaks
-    const urlParams = new URLSearchParams(window.location.search);
-    const platform = urlParams.get('platform');
-    const icon = platform === 'shopify' ? '🛒' : '🌐';
+<script>
+  const params = new URLSearchParams(window.location.search);
+  document.getElementById('platform').value = params.get('platform');
 
-    function saveChoice() {
-      const choice = document.querySelector('input[name="choice"]:checked')?.value;
-      if (!choice) return alert('Please choose an option');
-      fetch('/api/setup', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: `platform=${platform}&choice=${choice}` })
-        .then(res => res.text())
-        .then(text => {
-          alert(text);
-          document.getElementById('flow').innerHTML = `<h2>${choice === 'pull' ? 'Pull Products from Store' : 'Push Products to Store'} ${icon}</h2>`;
-          if (choice === 'pull') loadPull();
-          else loadPush();
-        });
-    }
+  document.getElementById('setupForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const data = new FormData(e.target);
 
-    function loadPull() { /* same as before, but badges improved */
-      fetch('/api/pull', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: `platform=${platform}` })
-        .then(res => res.json())
-        .then(matches => {
-          let html = '<ul>';
-          matches.forEach(p => {
-            html += `<li><strong>${p.name} (SKU: ${p.sku})</strong> <span class="badge ${p.status}">${p.status.replace('_', ' ')}</span></li>`;
-          });
-          html += '</ul><button onclick="alert(\'Sync activated successfully!\')">Confirm & Activate Sync</button>';
-          document.getElementById('flow').innerHTML += html;
-        });
-    }
+    await fetch('/api/setup', {
+      method: 'POST',
+      body: new URLSearchParams(data)
+    });
 
-    function loadPush() { /* same, with better form */
-      let html = '<h2>Product Readiness Check</h2><form id="pushForm">';
-      html += '<div class="card"><strong>T-Shirt (SKU: shirt1)</strong><br>';
-      html += 'Price: <input name="price_shirt1" value="20" style="width:100px;"><br>';
-      html += 'Image URL: <input name="image_shirt1" placeholder="https://example.com/image.jpg"><br><br>';
-      html += '<button type="button" onclick="submitPush()">Preview & Publish</button></div>';
-      html += '</form><div id="preview"></div>';
-      document.getElementById('flow').innerHTML += html;
-    }
+    window.location.href = '/';
+  };
+</script>
 
-    function submitPush() { /* same as before */
-      const form = document.getElementById('pushForm');
-      const body = new URLSearchParams(new FormData(form)).toString();
-      fetch('/api/push', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body })
-        .then(res => res.json())
-        .then(products => {
-          let prev = '<div class="card"><h3>Preview</h3><ul>';
-          products.forEach(p => {
-            prev += `<li><strong>${p.name} (SKU: ${p.sku})</strong> - <span class="badge ${p.ready ? 'active' : 'needs_attention'}">${p.ready ? 'Ready' : 'Needs price/image'}</span></li>`;
-          });
-          prev += '</ul>';
-          if (products.every(p => p.ready)) prev += '<button onclick="alert(\'Products published! Auto-sync enabled.\')">Confirm Publish</button>';
-          prev += '</div>';
-          document.getElementById('preview').innerHTML = prev;
-        });
-    }
-  </script>
 </body>
 </html>
