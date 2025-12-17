@@ -27,7 +27,10 @@ const server = http.createServer((req, res) => {
   if (pathname.startsWith('/public/')) {
     const filePath = '.' + pathname;
     if (fs.existsSync(filePath)) {
-      const contentType = filePath.endsWith('.css') ? 'text/css' : 'text/html';
+      let contentType = 'text/html';
+      if (filePath.endsWith('.css')) contentType = 'text/css';
+      else if (filePath.endsWith('.js')) contentType = 'application/javascript';
+      else if (filePath.endsWith('.json')) contentType = 'application/json';
       res.writeHead(200, { 'Content-Type': contentType });
       res.end(fs.readFileSync(filePath));
     } else {

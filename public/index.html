@@ -1,99 +1,52 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Prokip Integrations</title>
-  <link rel="stylesheet" href="/public/style.css">
+  <meta charset="UTF-8" />
+  <title>Prokip – E-commerce Integrations</title>
+  <link rel="stylesheet" href="/public/styles.css" />
 </head>
 <body>
+
+<header class="header">
+  <div class="logo">Prokip</div>
+  <div class="help">Help</div>
+</header>
+
+<main class="page">
   <div class="container">
-    <h1>Settings > Integrations > E-commerce</h1>
-    <p class="helper">Connect your online store to automatically sync sales and inventory.</p>
 
-    <div class="card">
-      <label>Select Business Location:</label>
+    <h1>E-commerce Integrations</h1>
+    <p class="subtitle">
+      Connect your online store to automatically sync sales and inventory.
+    </p>
+
+    <div class="location">
+      <label>Business Location</label>
       <select id="location">
-        <option value="location1">Location 1</option>
-        <option value="location2">Location 2</option>
+        <option value="default">Main Store</option>
       </select>
-
-      <div style="text-align: center; margin: 30px 0;">
-        <button onclick="connect('shopify')"><span class="platform-icon">🛒</span> Connect Shopify</button>
-        <button onclick="connect('woocommerce')"><span class="platform-icon">🌐</span> Connect WooCommerce</button>
-      </div>
     </div>
 
-    <div id="connections" class="card">
+    <section>
       <h2>Connected Stores</h2>
-      <!-- Filled by JS -->
-    </div>
+      <div id="stores"></div>
+    </section>
 
-    <div id="status"></div>
+    <section class="connect-section">
+      <h3>Connect a new store</h3>
+      <div class="connect-buttons">
+        <button class="connect shopify" onclick="connectStore('shopify')">
+          Connect Shopify
+        </button>
+        <button class="connect woo" onclick="connectStore('woocommerce')">
+          Connect WooCommerce
+        </button>
+      </div>
+    </section>
+
   </div>
+</main>
 
-  <script>
-    // Same script as before (no changes needed)
-    function connect(platform) {
-      const location = document.getElementById('location').value;
-      alert("You’ll be redirected to your store to securely approve access. Prokip will never see your password.");
-      setTimeout(() => {
-        window.location.href = `/connect/${platform}?location=${location}`;
-      }, 1000);
-    }
-
-    function loadConnections() {
-      fetch('/api/connections')
-        .then(res => res.json())
-        .then(conns => {
-          const div = document.getElementById('connections');
-          if (conns.length === 0) {
-            div.innerHTML = '<h2>Connected Stores</h2><p>No stores connected yet.</p>';
-            return;
-          }
-          div.innerHTML = '<h2>Connected Stores</h2><ul>';
-          conns.forEach(c => {
-            const icon = c.platform === 'shopify' ? '🛒' : '🌐';
-            div.innerHTML += `
-              <li>
-                <div>
-                  <strong><span class="platform-icon">${icon}</span> ${c.storeName}</strong><br>
-                  Last Sync: ${new Date(c.lastSync).toLocaleString()}<br>
-                  Status: <span class="badge ${c.syncEnabled ? 'active' : 'paused'}">${c.syncEnabled ? 'Active' : 'Paused'}</span>
-                </div>
-                <div>
-                  <button class="secondary" onclick="toggle('${c.platform}')">Toggle Sync</button>
-                  <button onclick="syncNow('${c.platform}')">Sync Now</button>
-                  <button class="danger" onclick="disconnect('${c.platform}')">Disconnect</button>
-                </div>
-              </li>`;
-          });
-          div.innerHTML += '</ul>';
-        });
-    }
-
-    function toggle(platform) { /* same as before */ 
-      fetch('/api/toggle', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: `platform=${platform}` })
-        .then(res => res.text())
-        .then(text => { alert(text); loadConnections(); });
-    }
-
-    function syncNow(platform) { /* same */
-      fetch('/api/sync-now', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: `platform=${platform}` })
-        .then(res => res.text())
-        .then(text => { alert(text); loadConnections(); });
-    }
-
-    function disconnect(platform) { /* same */
-      if (confirm('Disconnecting will stop inventory and sales syncing.')) {
-        fetch('/api/disconnect', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: `platform=${platform}` })
-          .then(res => res.text())
-          .then(text => { alert(text); loadConnections(); });
-      }
-    }
-
-    loadConnections();
-    setInterval(loadConnections, 10000); // Auto-refresh every 10s
-  </script>
+<script src="/public/app.js"></script>
 </body>
 </html>
