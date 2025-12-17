@@ -17,5 +17,8 @@
   "bugs": {
     "url": "https://github.com/bjeptum/prokip-ecommerce-integration/issues"
   },
-  "homepage": "https://github.com/bjeptum/prokip-ecommerce-integration#readme"
+  "homepage": "https://github.com/bjeptum/prokip-ecommerce-integration#readme",
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
 }
