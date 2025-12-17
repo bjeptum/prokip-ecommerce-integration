@@ -1,0 +1,7 @@
+body { font-family: Arial, sans-serif; margin: 20px; }
+h1, h2 { color: #333; }
+button { padding: 10px; margin: 5px; background: #007bff; color: white; border: none; cursor: pointer; }
+button:hover { background: #0056b3; }
+.badge { padding: 5px; border-radius: 5px; }
+.badge.matched { background: green; color: white; }
+.badge.needs_attention { background: orange; color: white; }
