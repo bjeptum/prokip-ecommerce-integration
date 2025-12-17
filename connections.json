@@ -9,6 +9,15 @@
       "syncEnabled": true,
       "locationId": "location2",
       "choice": "push"
+    },
+    {
+      "platform": "woocommerce",
+      "storeName": "Woocommerce Store",
+      "token": "fake_token_woocommerce",
+      "status": "connected",
+      "lastSync": "2025-12-17T09:39:52.862Z",
+      "syncEnabled": true,
+      "locationId": "location2"
     }
   ],
   "inventory": {},

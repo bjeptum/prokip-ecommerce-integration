@@ -1,77 +1,86 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Prokip Setup</title>
   <link rel="stylesheet" href="/public/style.css">
 </head>
 <body>
-  <h1>Choose Product Setup Method</h1>
-  <p>Helper: Choose how you’d like to set up products for syncing.</p>
-  <label>
-    <input type="radio" name="choice" value="pull"> Use products from my online store (Pull)
-  </label><br>
-  <label>
-    <input type="radio" name="choice" value="push"> Use products from Prokip (Push)
-  </label><br>
-  <button onclick="saveChoice()">Save and Continue</button>
-  <div id="flow"></div>
+  <div class="container">
+    <h1>Choose Product Setup Method</h1>
+    <p class="helper">Choose how you’d like to set up products for syncing.</p>
+
+    <div class="card">
+      <label>
+        <input type="radio" name="choice" value="pull"> Use products from my online store (Pull from store → Prokip)
+      </label><br><br>
+      <label>
+        <input type="radio" name="choice" value="push"> Use products from Prokip (Push to store)
+      </label><br><br>
+      <button onclick="saveChoice()">Continue Setup</button>
+    </div>
+
+    <div id="flow" class="card"></div>
+  </div>
 
   <script>
+    // Same script as before, with small UI tweaks
     const urlParams = new URLSearchParams(window.location.search);
     const platform = urlParams.get('platform');
+    const icon = platform === 'shopify' ? '🛒' : '🌐';
 
     function saveChoice() {
       const choice = document.querySelector('input[name="choice"]:checked')?.value;
-      if (!choice) return alert('Choose an option');
-      fetch('/api/setup', { method: 'POST', body: `platform=${platform}&choice=${choice}` })
+      if (!choice) return alert('Please choose an option');
+      fetch('/api/setup', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: `platform=${platform}&choice=${choice}` })
         .then(res => res.text())
         .then(text => {
           alert(text);
+          document.getElementById('flow').innerHTML = `<h2>${choice === 'pull' ? 'Pull Products from Store' : 'Push Products to Store'} ${icon}</h2>`;
           if (choice === 'pull') loadPull();
           else loadPush();
         });
     }
 
-    function loadPull() {
-      fetch('/api/pull', { method: 'POST', body: `platform=${platform}` })
+    function loadPull() { /* same as before, but badges improved */
+      fetch('/api/pull', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: `platform=${platform}` })
         .then(res => res.json())
         .then(matches => {
-          const div = document.getElementById('flow');
-          div.innerHTML = '<h2>Pull Products - Matching</h2><ul>';
+          let html = '<ul>';
           matches.forEach(p => {
-            div.innerHTML += `<li>SKU: ${p.sku}, Name: ${p.name} <span class="badge">${p.status}</span></li>`;
+            html += `<li><strong>${p.name} (SKU: ${p.sku})</strong> <span class="badge ${p.status}">${p.status.replace('_', ' ')}</span></li>`;
           });
-          div.innerHTML += '</ul><button onclick="alert(\'Sync activated!\')">Confirm and Activate Sync</button>';
+          html += '</ul><button onclick="alert(\'Sync activated successfully!\')">Confirm & Activate Sync</button>';
+          document.getElementById('flow').innerHTML += html;
         });
     }
 
-    function loadPush() {
-      const div = document.getElementById('flow');
-      div.innerHTML = '<h2>Push Products - Readiness Check</h2>';
-      div.innerHTML += '<form id="pushForm">';
-      div.innerHTML += 'Product: T-Shirt (SKU: shirt1)<br>';
-      div.innerHTML += 'Price: <input name="price_shirt1" value="20"><br>';
-      div.innerHTML += 'Image URL: <input name="image_shirt1" value=""><br>';
-      div.innerHTML += '<button type="button" onclick="submitPush()">Preview and Publish</button>';
-      div.innerHTML += '</form><div id="preview"></div>';
+    function loadPush() { /* same, with better form */
+      let html = '<h2>Product Readiness Check</h2><form id="pushForm">';
+      html += '<div class="card"><strong>T-Shirt (SKU: shirt1)</strong><br>';
+      html += 'Price: <input name="price_shirt1" value="20" style="width:100px;"><br>';
+      html += 'Image URL: <input name="image_shirt1" placeholder="https://example.com/image.jpg"><br><br>';
+      html += '<button type="button" onclick="submitPush()">Preview & Publish</button></div>';
+      html += '</form><div id="preview"></div>';
+      document.getElementById('flow').innerHTML += html;
     }
 
-    function submitPush() {
+    function submitPush() { /* same as before */
       const form = document.getElementById('pushForm');
-      const formData = new FormData(form);
-      const body = new URLSearchParams(formData).toString();
-      fetch('/api/push', { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+      const body = new URLSearchParams(new FormData(form)).toString();
+      fetch('/api/push', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body })
         .then(res => res.json())
         .then(products => {
-          const prev = document.getElementById('preview');
-          prev.innerHTML = '<h3>Preview</h3><ul>';
+          let prev = '<div class="card"><h3>Preview</h3><ul>';
           products.forEach(p => {
-            prev.innerHTML += `<li>SKU: ${p.sku}, Ready: ${p.ready ? 'Yes' : 'No (fix above)'}</li>`;
+            prev += `<li><strong>${p.name} (SKU: ${p.sku})</strong> - <span class="badge ${p.ready ? 'active' : 'needs_attention'}">${p.ready ? 'Ready' : 'Needs price/image'}</span></li>`;
           });
-          prev.innerHTML += '</ul>';
-          if (products.every(p => p.ready)) prev.innerHTML += '<button onclick="alert(\'Published! Sync enabled.\')">Confirm Publish</button>';
-        })
-        .catch(err => alert('Error: This product needs a price or image.'));
+          prev += '</ul>';
+          if (products.every(p => p.ready)) prev += '<button onclick="alert(\'Products published! Auto-sync enabled.\')">Confirm Publish</button>';
+          prev += '</div>';
+          document.getElementById('preview').innerHTML = prev;
+        });
     }
   </script>
 </body>
