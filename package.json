@@ -2,8 +2,11 @@
   "name": "prokip-ecommerce-integration",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "backend/app.js",
   "scripts": {
+    "dev": "node backend/app.js",
+    "prisma:migrate": "prisma migrate dev --name init",
+    "prisma:generate": "prisma generate",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -14,6 +17,15 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "express": "^4.21.0",
+    "morgan": "^1.10.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "prisma": "^5.20.0"
+  },
   "bugs": {
     "url": "https://github.com/bjeptum/prokip-ecommerce-integration/issues"
   },

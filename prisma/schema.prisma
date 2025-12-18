@@ -1,0 +1,44 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Connection {
+  id          Int      @id @default(autoincrement())
+  platform    String   @unique
+  storeName   String
+  token       String
+  status      String
+  lastSync    DateTime?
+  syncEnabled Boolean  @default(true)
+  locationId  String
+  choice      String?
+  sales       Sale[]
+}
+
+model InventoryItem {
+  id       Int    @id @default(autoincrement())
+  sku      String @unique
+  name     String?
+  price    Int?
+  image    String?
+  quantity Int    @default(0)
+}
+
+model Sale {
+  id        Int      @id @default(autoincrement())
+  orderId   String
+  sku       String
+  quantity  Int
+  platform  String
+  timestamp DateTime @default(now())
+
+  connection   Connection? @relation(fields: [connectionId], references: [id])
+  connectionId Int?
+}
+
+

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Setup Store</title>
+  <link rel="stylesheet" href="/public/styles.css">
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">Prokip</div>
+</header>
+
+<main class="page">
+  <div class="container">
+    <h1>Choose Product Setup</h1>
+    <p>Select how products should sync</p>
+
+    <form id="setupForm">
+      <input type="hidden" id="platform">
+
+      <label class="radio">
+        <input type="radio" name="choice" value="pull" required>
+        Use products from my online store
+      </label>
+
+      <label class="radio">
+        <input type="radio" name="choice" value="push">
+        Use products from Prokip
+      </label>
+
+      <button type="submit">Continue</button>
+    </form>
+  </div>
+</main>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  document.getElementById('platform').value = params.get('platform');
+
+  document.getElementById('setupForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const data = new FormData(e.target);
+
+    await fetch('/api/setup', {
+      method: 'POST',
+      body: new URLSearchParams(data)
+    });
+
+    window.location.href = '/';
+  };
+</script>
+
+</body>
+</html>
+
+
