@@ -1,32 +1,33 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "windows", "darwin", "darwin-arm64"]
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Connection {
-  id          Int      @id @default(autoincrement())
-  platform    String   @unique
+  id          Int       @id @default(autoincrement())
+  platform    String    @unique
   storeName   String
   token       String
   status      String
   lastSync    DateTime?
-  syncEnabled Boolean  @default(true)
+  syncEnabled Boolean   @default(true)
   locationId  String
   choice      String?
   sales       Sale[]
 }
 
 model InventoryItem {
-  id       Int    @id @default(autoincrement())
-  sku      String @unique
+  id       Int     @id @default(autoincrement())
+  sku      String  @unique
   name     String?
   price    Int?
   image    String?
-  quantity Int    @default(0)
+  quantity Int     @default(0)
 }
 
 model Sale {
@@ -40,5 +41,3 @@ model Sale {
   connection   Connection? @relation(fields: [connectionId], references: [id])
   connectionId Int?
 }
-
-

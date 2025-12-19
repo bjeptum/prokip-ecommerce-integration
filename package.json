@@ -4,9 +4,14 @@
   "description": "",
   "main": "backend/app.js",
   "scripts": {
-    "dev": "node backend/app.js",
-    "prisma:migrate": "prisma migrate dev --name init",
+    "start": "node server.js",
+    "dev": "node server.js",
     "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "prisma:reset": "prisma migrate reset",
+    "setup": "npm install && prisma generate && prisma migrate dev",
+    "postinstall": "prisma generate",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -19,6 +24,7 @@
   "type": "commonjs",
   "dependencies": {
     "@prisma/client": "^5.20.0",
+    "dotenv": "^16.6.1",
     "express": "^4.21.0",
     "morgan": "^1.10.0",
     "zod": "^3.23.8"

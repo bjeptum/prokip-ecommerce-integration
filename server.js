@@ -1,3 +1,6 @@
+// Load environment variables
+require('dotenv').config();
+
 // Legacy entry point kept for compatibility.
 // The real application now lives in `backend/app.js` using Express and Prisma.
 
