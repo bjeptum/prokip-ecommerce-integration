@@ -1,43 +1,43 @@
-generator client {
-  provider      = "prisma-client-js"
-  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "windows", "darwin", "darwin-arm64"]
-}
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
+generator client {
+  provider = "prisma-client-js"
+}
+
 model Connection {
-  id          Int       @id @default(autoincrement())
-  platform    String    @unique
-  storeName   String
-  token       String
-  status      String
-  lastSync    DateTime?
-  syncEnabled Boolean   @default(true)
-  locationId  String
-  choice      String?
-  sales       Sale[]
+  id             Int       @id @default(autoincrement())
+  platform       String
+  storeUrl       String    @unique
+  accessToken    String?
+  consumerKey    String?
+  consumerSecret String?
+  locationId     String?
+  lastSync       DateTime?
+  InventoryCache InventoryCache[]
+  SalesLog       SalesLog[]
 }
 
-model InventoryItem {
-  id       Int     @id @default(autoincrement())
-  sku      String  @unique
-  name     String?
-  price    Int?
-  image    String?
-  quantity Int     @default(0)
+model InventoryCache {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  sku          String
+  quantity     Int
+  connection   Connection @relation(fields: [connectionId], references: [id])
 }
 
-model Sale {
-  id        Int      @id @default(autoincrement())
-  orderId   String
-  sku       String
-  quantity  Int
-  platform  String
-  timestamp DateTime @default(now())
+model SalesLog {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  orderId      String
+  timestamp    DateTime   @default(now())
+  connection   Connection @relation(fields: [connectionId], references: [id])
+}
 
-  connection   Connection? @relation(fields: [connectionId], references: [id])
-  connectionId Int?
+model ProkipConfig {
+  id     Int     @id @default(1)
+  token  String
+  apiUrl String
 }

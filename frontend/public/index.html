@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Prokip E-commerce Integration Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>Prokip E-commerce Integration</h1>
+  
+  <section id="prokip-login">
+    <h2>Login to Prokip</h2>
+    <input type="text" id="username" placeholder="Username">
+    <input type="password" id="password" placeholder="Password">
+    <button onclick="loginProkip()">Login</button>
+  </section>
+  
+  <section id="connect-stores">
+    <h2>Connect Stores</h2>
+    <div>
+      <h3>Shopify</h3>
+      <input type="text" id="shopify-store" placeholder="mystore.myshopify.com">
+      <button onclick="connectShopify()">Connect Shopify</button>
+    </div>
+    <div>
+      <h3>WooCommerce</h3>
+      <input type="text" id="woo-store" placeholder="https://yourstore.com">
+      <input type="text" id="woo-key" placeholder="Consumer Key">
+      <input type="text" id="woo-secret" placeholder="Consumer Secret">
+      <button onclick="connectWoo()">Connect WooCommerce</button>
+    </div>
+  </section>
+  
+  <section id="product-setup">
+    <h2>Choose Product Setup</h2>
+    <select id="connection-select">
+      <!-- Populated by JS -->
+    </select>
+    <button onclick="setupProducts('pull')">Pull from Store to Prokip</button>
+    <button onclick="setupProducts('push')">Push from Prokip to Store</button>
+  </section>
+  
+  <section id="sync-controls">
+    <h2>Sync Controls</h2>
+    <button onclick="manualSync()">Sync Now</button>
+    <div id="status"></div>
+  </section>
+  
+  <script src="script.js"></script>
+</body>
+</html>
