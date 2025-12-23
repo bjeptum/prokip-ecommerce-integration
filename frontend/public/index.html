@@ -2,50 +2,61 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Prokip E-commerce Integration Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prokip E-commerce Integration</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <h1>Prokip E-commerce Integration</h1>
-  
-  <section id="prokip-login">
-    <h2>Login to Prokip</h2>
-    <input type="text" id="username" placeholder="Username">
-    <input type="password" id="password" placeholder="Password">
-    <button onclick="loginProkip()">Login</button>
-  </section>
-  
-  <section id="connect-stores">
-    <h2>Connect Stores</h2>
-    <div>
-      <h3>Shopify</h3>
-      <input type="text" id="shopify-store" placeholder="mystore.myshopify.com">
-      <button onclick="connectShopify()">Connect Shopify</button>
+  <div class="container">
+    <h1>Prokip E-commerce Integration</h1>
+
+    <section id="login-section">
+      <h2>Login to Dashboard</h2>
+      <input type="text" id="username" placeholder="Username" />
+      <input type="password" id="password" placeholder="Password" />
+      <button onclick="login()">Login</button>
+      <p id="login-error" style="color:red;"></p>
+    </section>
+
+    <div id="dashboard" style="display:none;">
+      <section id="prokip-config">
+        <h2>Prokip API Configuration</h2>
+        <input type="text" id="token" placeholder="API Token (from Prokip app)" />
+        <input type="text" id="locationId" placeholder="Location ID (e.g., 1)" />
+        <button onclick="setProkipConfig()">Save Prokip Config</button>
+      </section>
+
+      <section id="connections">
+        <h2>Connect Stores</h2>
+        <div>
+          <h3>Shopify</h3>
+          <input type="text" id="shopify-store" placeholder="yourstore.myshopify.com" />
+          <button onclick="connectShopify()">Connect</button>
+        </div>
+        <div>
+          <h3>WooCommerce</h3>
+          <input type="text" id="woo-url" placeholder="https://yourstore.com" />
+          <input type="text" id="woo-key" placeholder="Consumer Key" />
+          <input type="text" id="woo-secret" placeholder="Consumer Secret" />
+          <button onclick="connectWoo()">Connect</button>
+        </div>
+      </section>
+
+      <section id="product-setup">
+        <h2>Product Setup</h2>
+        <select id="connection-select"></select>
+        <button onclick="pushProducts()">Push from Prokip → Store</button>
+        <button onclick="pullProducts()" disabled>Pull from Store → Prokip (Limited)</button>
+      </section>
+
+      <section id="sync">
+        <h2>Sync Control</h2>
+        <button onclick="manualSync()">Sync Now</button>
+        <div id="status-list"></div>
+      </section>
     </div>
-    <div>
-      <h3>WooCommerce</h3>
-      <input type="text" id="woo-store" placeholder="https://yourstore.com">
-      <input type="text" id="woo-key" placeholder="Consumer Key">
-      <input type="text" id="woo-secret" placeholder="Consumer Secret">
-      <button onclick="connectWoo()">Connect WooCommerce</button>
-    </div>
-  </section>
-  
-  <section id="product-setup">
-    <h2>Choose Product Setup</h2>
-    <select id="connection-select">
-      <!-- Populated by JS -->
-    </select>
-    <button onclick="setupProducts('pull')">Pull from Store to Prokip</button>
-    <button onclick="setupProducts('push')">Push from Prokip to Store</button>
-  </section>
-  
-  <section id="sync-controls">
-    <h2>Sync Controls</h2>
-    <button onclick="manualSync()">Sync Now</button>
-    <div id="status"></div>
-  </section>
-  
+  </div>
+
   <script src="script.js"></script>
 </body>
 </html>

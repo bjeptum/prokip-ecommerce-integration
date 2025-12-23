@@ -1,0 +1,50 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id       Int     @id @default(autoincrement())
+  username String  @unique
+  password String
+}
+
+model Connection {
+  id             Int       @id @default(autoincrement())
+  platform       String
+  storeUrl       String    @unique
+  accessToken    String?
+  consumerKey    String?
+  consumerSecret String?
+  lastSync       DateTime?
+  InventoryCache InventoryCache[]
+  SalesLog       SalesLog[]
+}
+
+model InventoryCache {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  sku          String
+  quantity     Int
+  connection   Connection @relation(fields: [connectionId], references: [id])
+}
+
+model SalesLog {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  orderId      String
+  prokipSellId String?
+  timestamp    DateTime   @default(now())
+  connection   Connection @relation(fields: [connectionId], references: [id])
+}
+
+model ProkipConfig {
+  id         Int     @id @default(1)
+  token      String
+  apiUrl     String
+  locationId String
+}

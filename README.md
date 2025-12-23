@@ -4,117 +4,169 @@
 This repository contains a **production-ready** Prokip E-commerce Integration system.  
 It connects **Shopify** and **WooCommerce** stores with **real-time, two-way product, sales, and inventory synchronization**.
 
-The system is built with **Node.js** and **PostgreSQL**, providing enterprise-grade data persistence, transaction safety, and scalability.  
-It implements all core requirements for multi-store e-commerce integration with unified inventory management.
+The system is built with **Node.js**, **Express.js**, **Prisma ORM**, and **PostgreSQL**, providing enterprise-grade data persistence, transaction safety, and scalability.  
+It implements all core requirements for multi-store e-commerce integration with unified inventory management across multiple platforms.
 
-This project is ready for deployment and provides a solid foundation for production use with real API integrations.
+This project is ready for deployment and provides a solid foundation for production use with real OAuth integrations, JWT authentication, and automated background sync jobs.
 
 
 ## Features Implemented
 
 ### Core Integration Features
--  **Multi-store Support**: Connect unlimited Shopify and WooCommerce stores
-- **Location-based Management**: Different stores for different business locations
-- **Self-service Connection**: Simulated OAuth flow (ready for real API integration)
-- **Flexible Sync Strategy**: 
-  - **Pull**: Use products from online store → Push to Prokip
-  - **Push**: Use products from Prokip → Push to online store
+- **Multi-store Support**: Connect unlimited Shopify and WooCommerce stores
+- **Multi-location Management**: Different stores for different business locations
+- **OAuth Authentication**: Real Shopify OAuth flow integration
+- **WooCommerce REST API**: Consumer key/secret authentication
+- **JWT-based Security**: Protected API endpoints with token authentication
+- **User Management**: Secure registration and login system
+- **Bi-directional Sync**: 
+  - **Store → Prokip**: Sales from stores update Prokip inventory
+  - **Prokip → Stores**: Inventory changes in Prokip push to all stores
 
 ### Real-time Synchronization
--  **Webhook Integration**: Instant inventory updates when orders are placed
--  **Automatic Inventory Deduction**: Sales reduce inventory in real-time
+- **Webhook Integration**: Instant order processing from Shopify/WooCommerce
+- **Automatic Inventory Updates**: Sales reduce inventory across all platforms
+- **Scheduled Polling**: Cron jobs sync Prokip inventory to stores every 5 minutes
 - **Refund Handling**: Returns automatically restore inventory
--  **Transaction Safety**: PostgreSQL transactions prevent data corruption
-- **Unified Inventory**: Single source of truth across all platforms
+- **Transaction Safety**: Prisma ORM with PostgreSQL ACID transactions
+- **Unified Inventory**: Single source of truth in Prokip
 
 ### Management Dashboard
--  **Connection Overview**: View all connected stores at a glance
-- **Manual Sync**: Force synchronization on demand
--  **Toggle Sync**: Pause/resume auto-sync per store
-- **Safe Disconnect**: Remove store connections cleanly
--  **Auto-refresh**: Dashboard updates every 10 seconds
-- **Status Indicators**: Color-coded badges (Active, Paused, Needs Attention)
+- **Connection Overview**: View all connected stores at a glance
+- **Store Status**: See connection health and last sync time
+- **Manual Sync**: Force immediate synchronization on demand
+- **Secure Access**: Login required to manage connections
+- **REST API**: Complete API for programmatic access
 
 ### Data & Persistence
--  **PostgreSQL Database**: Reliable, ACID-compliant data storage
--  **Two Tables**: `connections` (store configs) + `inventory` (products)
-- **Sales Logging**: Track every transaction (referenced in code)
--  **Audit Trail**: last_sync timestamps for monitoring
-
-
+- **PostgreSQL Database**: Production-grade RDBMS with ACID compliance
+- **Prisma ORM**: Type-safe database queries with migrations
+- **Five Core Tables**: 
+  - `User` - Authentication
+  - `Connection` - Store configurations
+  - `InventoryCache` - SKU-level inventory tracking
+  - `SalesLog` - Audit trail of all sales
+  - `ProkipConfig` - Prokip API credentials
+- **Environment-based Config**: `.env` file for secure credential management
+- **Cross-platform Support**: Works on Windows, Linux, and macOS
 
 ## Tech Stack
 
 ### Backend
-- **Server**: Node.js (Pure HTTP, no frameworks)
-- **Database**: PostgreSQL 12+
-- **Node Modules**: 
-  - `http` - Web server
-  - `fs` - File operations
-  - `url` - URL parsing
-  - `querystring` - Form data parsing
-  - `pg` - PostgreSQL client
+- **Framework**: Express.js 4.18+
+- **Database**: PostgreSQL 12+ (Production-ready RDBMS)
+- **ORM**: Prisma 5.7+ (Type-safe database access)
+- **Runtime**: Node.js v16+
+- **Authentication**: JWT (jsonwebtoken) + bcryptjs
+- **Background Jobs**: node-cron (scheduled sync tasks)
+- **HTTP Client**: Axios (API requests to Shopify/WooCommerce/Prokip)
+- **Validation**: express-validator
+- **OAuth**: oauth package (for Shopify OAuth flow)
+- **Environment Config**: dotenv
 
 ### Frontend
 - **UI**: Vanilla HTML5, CSS3, JavaScript
-- **Design**: Modern card-based responsive interface
-- **No frameworks**: Pure JavaScript for maximum compatibility
+- **Design**: Modern responsive interface
+- **API Communication**: Fetch API
+- **Authentication**: Session storage for JWT tokens
 
-### Database Schema
-```sql
--- connections table
-CREATE TABLE connections (
-  id SERIAL PRIMARY KEY,
-  platform VARCHAR(20) NOT NULL,
-  store_name VARCHAR(100),
-  token TEXT,
-  status VARCHAR(20) DEFAULT 'connected',
-  last_sync TIMESTAMP,
-  sync_enabled BOOLEAN DEFAULT true,
-  location_id VARCHAR(50),
-  choice VARCHAR(10)
-);
+### Database Schema (Prisma)
 
--- inventory table
-CREATE TABLE inventory (
-  sku VARCHAR(50) PRIMARY KEY,
-  name VARCHAR(100),
-  quantity INTEGER DEFAULT 0,
-  price NUMERIC(10,2),
-  image_url TEXT
-);
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
 
--- sales_logs table (referenced in webhook code)
-CREATE TABLE sales_logs (
-  id SERIAL PRIMARY KEY,
-  order_id VARCHAR(100),
-  sku VARCHAR(50),
-  quantity INTEGER,
-  platform VARCHAR(20),
-  status VARCHAR(20),
-  created_at TIMESTAMP DEFAULT NOW()
-);
+model User {
+  id       Int     @id @default(autoincrement())
+  username String  @unique
+  password String  // bcrypt hashed
+}
+
+model Connection {
+  id             Int       @id @default(autoincrement())
+  platform       String    // 'shopify' or 'woocommerce'
+  storeUrl       String    @unique
+  accessToken    String?   // Shopify OAuth token
+  consumerKey    String?   // WooCommerce key
+  consumerSecret String?   // WooCommerce secret
+  lastSync       DateTime?
+  InventoryCache InventoryCache[]
+  SalesLog       SalesLog[]
+}
+
+model InventoryCache {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  sku          String
+  quantity     Int
+  connection   Connection @relation(fields: [connectionId], references: [id])
+}
+
+model SalesLog {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  orderId      String     // Store order ID
+  prokipSellId String?    // Prokip transaction ID
+  timestamp    DateTime   @default(now())
+  connection   Connection @relation(fields: [connectionId], references: [id])
+}
+
+model ProkipConfig {
+  id         Int     @id @default(1)
+  token      String  // Prokip API token
+  apiUrl     String  // Prokip API base URL
+  locationId String  // Prokip location/branch ID
+}
 ```
 
 ## Project Structure
 
 ```
 prokip-ecommerce-integration/
-├── server.js              # Main Node.js server
-├── package.json           # Dependencies
-├── connections.json       # Origin file (replaced by PostgreSQL)
-├── public/
-│   ├── index.html        # Main dashboard UI
-│   ├── setup.html        # Setup wizard for new connections
-│   └── styles.css    
-└── README.md
+│
+├── backend/                        # Backend application
+│   ├── src/
+│   │   ├── app.js                 # Express app entry point
+│   │   ├── routes/
+│   │   │   ├── authRoutes.js      # User registration/login
+│   │   │   ├── connectionRoutes.js # Store connection management
+│   │   │   ├── setupRoutes.js     # Initial setup & config
+│   │   │   └── syncRoutes.js      # Manual sync triggers
+│   │   ├── services/
+│   │   │   ├── syncService.js     # Background sync logic
+│   │   │   ├── shopifyService.js  # Shopify API integration
+│   │   │   └── woocommerceService.js # WooCommerce API
+│   │   └── middlewares/
+│   │       └── authMiddleware.js  # JWT verification
+│   ├── prisma/
+│   │   ├── schema.prisma          # Database schema
+│   │   └── migrations/            # Database migrations
+│   ├── .env                       # Environment variables (gitignored)
+│   ├── .env.example               # Environment template
+│   └── package.json               # Backend dependencies
+│
+├── frontend/                      # Frontend application
+│   └── public/
+│       ├── index.html            # Main dashboard
+│       ├── setup.html            # Setup wizard
+│       ├── login.html            # Authentication page
+│       └── styles.css            # Global styles
+│
+├── README.md                      # This file
+├── SETUP.md                       # Detailed setup guide
+└── .gitignore                     # Git ignore rules
 ```
 
 ## Installation & Setup
 
 ### Prerequisites
-- **Node.js** v16 or higher
-- **PostgreSQL** 12 or higher 
+- **Node.js** v16 or higher ([Download](https://nodejs.org))
+- **PostgreSQL** 12 or higher ([Download](https://www.postgresql.org/download/))
+- **Git** (for cloning the repository)
+
+---
 
 ### Step 1: Clone Repository
 ```bash
@@ -122,14 +174,11 @@ git clone https://github.com/bjeptum/prokip-ecommerce-integration.git
 cd prokip-ecommerce-integration
 ```
 
-### Step 2: Install Dependencies
-```bash
-npm install
-```
+---
 
-### Step 3: Setup PostgreSQL Database
+### Step 2: Setup PostgreSQL Database
 
-#### 3.1 Start PostgreSQL
+#### 2.1 Start PostgreSQL Service
 ```bash
 # On Ubuntu/Debian
 sudo systemctl start postgresql
@@ -142,93 +191,400 @@ brew services start postgresql
 # Use Services app or pg_ctl start
 ```
 
-#### 3.2 Create Database
+#### 2.2 Create Database
 ```bash
 # Connect as postgres user
 sudo -u postgres psql
 
-# Inside psql terminal:
+# Inside psql terminal, run:
 CREATE DATABASE prokip_integration;
-\c prokip_integration
-
-# Create tables
-CREATE TABLE connections (
-  id SERIAL PRIMARY KEY,
-  platform VARCHAR(20) NOT NULL,
-  store_name VARCHAR(100),
-  token TEXT,
-  status VARCHAR(20) DEFAULT 'connected',
-  last_sync TIMESTAMP,
-  sync_enabled BOOLEAN DEFAULT true,
-  location_id VARCHAR(50),
-  choice VARCHAR(10)
-);
-
-CREATE TABLE inventory (
-  sku VARCHAR(50) PRIMARY KEY,
-  name VARCHAR(100),
-  quantity INTEGER DEFAULT 0,
-  price NUMERIC(10,2),
-  image_url TEXT
-);
-
-CREATE TABLE sales_logs (
-  id SERIAL PRIMARY KEY,
-  order_id VARCHAR(100),
-  sku VARCHAR(50),
-  quantity INTEGER,
-  platform VARCHAR(20),
-  status VARCHAR(20),
-  created_at TIMESTAMP DEFAULT NOW()
-);
 
 # Exit psql
 \q
 ```
 
-#### 3.3 Set PostgreSQL Password
+#### 2.3 Set PostgreSQL Password (if needed)
 ```bash
 sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'prokip123';"
 ```
 
-#### 3.4 Configure Authentication
-Update your `~/.pgpass` file for easy CLI access:
+---
+
+### Step 3: Configure Backend
+
+#### 3.1 Navigate to Backend Directory
 ```bash
-echo "localhost:5432:*:postgres:prokip123" > ~/.pgpass
-chmod 600 ~/.pgpass
+cd backend
 ```
 
-### Step 4: Configure Server
-Open `server.js` and verify the database configuration (lines 8-13):
-```javascript
-const pool = new Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'prokip_integration',
-  password: 'prokip123',  // Change if you used a different password
-  port: 5432,
-});
-```
-
-### Step 5: Start the Server
+#### 3.2 Install Dependencies
 ```bash
-node server.js
+npm install
 ```
 
-You should see:
-```
-Server running at http://localhost:3000
-PostgreSQL integration active!
-PostgreSQL connected successfully: { now: 2025-12-17T10:31:27.678Z }
+#### 3.3 Configure Environment Variables
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Edit .env with your credentials
+nano .env  # or use your preferred editor
 ```
 
-### Step 6: Access the Dashboard
+**Important variables in `.env`:**
+```dotenv
+# Database connection
+DATABASE_URL=postgresql://postgres:prokip123@localhost:5432/prokip_integration?schema=public
+
+# Server configuration
+PORT=3000
+NODE_ENV=development
+
+# Shopify OAuth credentials (get from Shopify Partner Dashboard)
+SHOPIFY_CLIENT_ID=your_shopify_api_key
+SHOPIFY_CLIENT_SECRET=your_shopify_api_secret
+REDIRECT_URI=http://localhost:3000/connections/callback/shopify
+
+# Prokip API credentials
+PROKIP_API=https://api.prokip.africa
+
+# JWT secret (change this to a random string)
+JWT_SECRET=your_very_strong_jwt_secret_here_change_in_production
+```
+
+#### 3.4 Run Database Migrations
+```bash
+# Generate Prisma Client for your OS
+npm run prisma:generate
+
+# Push database schema to PostgreSQL
+npm run prisma:migrate
+```
+
+This creates all necessary tables in your PostgreSQL database.
+
+---
+
+### Step 4: Start the Application
+
+```bash
+# Start the backend server
+npm start
+```
+
+Expected output:
+```
+Backend server running on http://localhost:3000
+```
+
+---
+
+### Step 5: Access the Application
+
 Open your browser and navigate to:
 ```
 http://localhost:3000
 ```
 
-## Complete Data Flow Architecture
+#### First-time Setup:
+1. **Register an account** at `/login.html`
+2. **Login** with your credentials
+3. **Configure Prokip** credentials in the setup page
+4. **Connect stores** (Shopify or WooCommerce)
+
+
+## Authentication Flow
+
+### User Registration/Login
+```bash
+# Register new user
+POST /auth/register
+{
+  "username": "admin",
+  "password": "securepassword123"
+}
+
+# Login
+POST /auth/login
+{
+  "username": "admin",
+  "password": "securepassword123"
+}
+
+# Returns JWT token for authenticated requests
+```
+
+### Protected Routes
+All `/connections`, `/setup`, and `/sync` routes require JWT authentication.
+
+Include token in requests:
+```
+Authorization: Bearer <your-jwt-token>
+```
+
+## How It Works
+
+### 1. Connection Flow
+
+#### Shopify OAuth Flow
+```
+User clicks "Connect Shopify"
+  ↓
+Redirects to Shopify OAuth consent page
+  ↓
+User approves access
+  ↓
+Shopify redirects back with authorization code
+  ↓
+Backend exchanges code for permanent access token
+  ↓
+Token stored in PostgreSQL (Connection table)
+  ↓
+Webhooks registered with Shopify
+```
+
+#### WooCommerce Connection
+```
+User enters store URL + Consumer Key/Secret
+  ↓
+Backend validates credentials via WooCommerce API
+  ↓
+Credentials stored in PostgreSQL (encrypted)
+  ↓
+Webhook endpoints configured
+```
+
+---
+
+### 2. Synchronization Flow
+
+#### Store → Prokip (Webhook-based)
+```
+Customer places order on Shopify/WooCommerce
+  ↓
+Store sends webhook to /connections/webhook/{platform}
+  ↓
+Backend parses order data
+  ↓
+Updates InventoryCache (decrements quantity)
+  ↓
+Creates SalesLog entry
+  ↓
+Sends order to Prokip API
+  ↓
+Prokip processes sale and returns sell_id
+  ↓
+Updates SalesLog with prokipSellId
+```
+
+#### Prokip → Stores (Scheduled Polling)
+```
+Cron job runs every 5 minutes
+  ↓
+Fetches current inventory from Prokip API
+  ↓
+Compares with InventoryCache
+  ↓
+For each changed SKU:
+  - Updates InventoryCache
+  - Pushes new quantity to all connected stores
+  - Updates lastSync timestamp
+```
+
+---
+
+### 3. Data Flow Diagram
+
+```
+┌─────────────────┐         ┌─────────────────┐
+│  Shopify Store  │         │ WooCommerce     │
+│  (Location 1)   │         │ Store (Loc 2)   │
+└────────┬────────┘         └────────┬────────┘
+         │                           │
+         │ Webhooks (Orders)         │ Webhooks
+         │                           │
+         ▼                           ▼
+┌────────────────────────────────────────────────┐
+│         Prokip Integration Backend             │
+│         (Express + Prisma + PostgreSQL)        │
+│                                                │
+│  Routes:                                       │
+│  • POST /auth/register - User signup           │
+│  • POST /auth/login - Authentication           │
+│  • POST /connections/shopify - OAuth           │
+│  • POST /connections/woocommerce - Connect     │
+│  • GET  /connections - List all stores         │
+│  • POST /connections/webhook/:platform         │
+│  • POST /sync/manual - Force sync              │
+│                                                │
+│  Background Jobs:                              │
+│  • pollProkipToStores() - Every 5 min          │
+└────────────────┬───────────────────────────────┘
+                 │
+                 │ Prisma ORM
+                 ▼
+┌────────────────────────────────────────────────┐
+│          PostgreSQL Database                   │
+│          (prokip_integration)                  │
+│                                                │
+│  Tables:                                       │
+│  • User (authentication)                       │
+│  • Connection (store configs)                  │
+│  • InventoryCache (SKU tracking)               │
+│  • SalesLog (audit trail)                      │
+│  • ProkipConfig (API credentials)              │
+└────────────────┬───────────────────────────────┘
+                 │
+                 │ API Requests
+                 ▼
+┌────────────────────────────────────────────────┐
+│           Prokip API                           │
+│           https://api.prokip.africa            │
+│                                                │
+│  Endpoints Used:                               │
+│  • GET /inventory - Fetch current stock        │
+│  • POST /sells - Record sales                  │
+└────────────────────────────────────────────────┘
+```
+
+## API Endpoints Reference
+
+### Authentication Endpoints
+
+#### Register User
+```http
+POST /auth/register
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "securepassword123"
+}
+
+Response: 201 Created
+{
+  "message": "User registered successfully"
+}
+```
+
+#### Login
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "securepassword123"
+}
+
+Response: 200 OK
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+---
+
+### Connection Management (Requires JWT)
+
+#### Connect Shopify Store
+```http
+GET /connections/shopify?shop=mystore.myshopify.com
+Authorization: Bearer <jwt-token>
+
+Response: Redirects to Shopify OAuth
+```
+
+#### Connect WooCommerce Store
+```http
+POST /connections/woocommerce
+Authorization: Bearer <jwt-token>
+Content-Type: application/json
+
+{
+  "storeUrl": "https://mystore.com",
+  "consumerKey": "ck_xxxxxxxxxxxx",
+  "consumerSecret": "cs_xxxxxxxxxxxx"
+}
+
+Response: 200 OK
+{
+  "message": "WooCommerce store connected successfully"
+}
+```
+
+#### List All Connections
+```http
+GET /connections
+Authorization: Bearer <jwt-token>
+
+Response: 200 OK
+[
+  {
+    "id": 1,
+    "platform": "shopify",
+    "storeUrl": "mystore.myshopify.com",
+    "lastSync": "2025-12-23T10:30:00Z"
+  }
+]
+```
+
+#### Receive Webhooks (Public endpoint)
+```http
+POST /connections/webhook/shopify
+Content-Type: application/json
+
+{
+  "id": 123456789,
+  "line_items": [
+    {
+      "sku": "SHIRT-001",
+      "quantity": 2
+    }
+  ]
+}
+
+Response: 200 OK
+```
+
+---
+
+### Sync Endpoints (Requires JWT)
+
+#### Manual Sync
+```http
+POST /sync/manual
+Authorization: Bearer <jwt-token>
+
+Response: 200 OK
+{
+  "message": "Sync completed successfully"
+}
+```
+
+---
+
+### Setup Endpoints (Requires JWT)
+
+#### Configure Prokip Credentials
+```http
+POST /setup/prokip
+Authorization: Bearer <jwt-token>
+Content-Type: application/json
+
+{
+  "token": "prokip_api_token_here",
+  "apiUrl": "https://api.prokip.africa",
+  "locationId": "LOCATION_001"
+}
+
+Response: 200 OK
+{
+  "message": "Prokip configured successfully"
+}
+```
+
+## Real-World Usage Scenarios
 
 ### System Overview
 
@@ -306,35 +662,148 @@ http://localhost:3000
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-##  Real-World Usage Scenarios
+## Real-World Usage Scenarios
 
-### Scenario 1: Connecting Shopify Store
+### Scenario 1: First-Time Setup & Shopify Connection
 
 ```
-1. Merchant opens http://localhost:3000
-    Server: GET / → Serves index.html
-    Browser: Executes loadConnections()
-    Server: GET /api/connections
-    Database: SELECT * FROM connections
-    Response: [] (empty initially)
+Step 1: User Registration
+  ↓
+POST /auth/register
+{username: "admin", password: "secure123"}
+  ↓
+User account created in PostgreSQL
+  ↓
+POST /auth/login
+  ↓
+Receives JWT token
+  ↓
+Stores token in browser (sessionStorage)
 
-2. Merchant selects "Location 1" and clicks [Connect Shopify]
-   Browser: connect('shopify') function
-   Alert: "You'll be redirected to your store..."
-   Redirect: /connect/shopify?location=location1
+Step 2: Configure Prokip API
+  ↓
+POST /setup/prokip (with JWT)
+{
+  token: "prokip_api_xxx",
+  apiUrl: "https://api.prokip.africa",
+  locationId: "LOC001"
+}
+  ↓
+ProkipConfig table updated
 
-3. Server processes connection (server.js lines 70-87)
-   Extracts: platform='shopify', locationId='location1'
-   Generates: token='fake_token_shopify', storeName='Shopify Store'
-   Database: INSERT INTO connections 
-               (platform, store_name, token, status, last_sync, 
-                sync_enabled, location_id)
-               VALUES ('shopify', 'Shopify Store', 'fake_token_shopify',
-                       'connected', NOW(), TRUE, 'location1')
-   Redirect: /setup?platform=shopify
+Step 3: Connect Shopify Store
+  ↓
+GET /connections/shopify?shop=mystore.myshopify.com (with JWT)
+  ↓
+Redirects to Shopify OAuth consent page
+  ↓
+User approves access
+  ↓
+Shopify calls back: GET /connections/callback/shopify?code=xxx
+  ↓
+Backend exchanges code for permanent access_token
+  ↓
+Prisma creates Connection record:
+  - platform: "shopify"
+  - storeUrl: "mystore.myshopify.com"
+  - accessToken: "shpat_xxxxx"
+  ↓
+Backend registers webhooks with Shopify:
+  - POST https://mystore.myshopify.com/admin/api/webhooks.json
+  - Topic: "orders/create"
+  - Address: "http://yourdomain.com/connections/webhook/shopify"
+  ↓
+Connection complete!
+```
 
-4. Setup wizard loads (setup.html)
-   Shows: Pull or Push strategy choice
+---
+
+### Scenario 2: Customer Places Order on Shopify
+
+```
+1. Customer buys 3 T-Shirts (SKU: SHIRT-001) on Shopify
+  ↓
+2. Shopify processes payment
+  ↓
+3. Shopify sends webhook
+  ↓
+POST /connections/webhook/shopify
+{
+  "id": 789456123,
+  "line_items": [
+    {
+      "sku": "SHIRT-001",
+      "quantity": 3
+    }
+  ]
+}
+  ↓
+4. Backend receives webhook
+  ↓
+5. Finds Connection by storeUrl
+  ↓
+6. Updates InventoryCache:
+   - Find or create SHIRT-001
+   - Decrease quantity by 3
+  ↓
+7. Creates SalesLog entry:
+   - orderId: "789456123"
+   - sku: "SHIRT-001"
+   - quantity: 3
+   - timestamp: NOW()
+  ↓
+8. Sends sale to Prokip API:
+   POST https://api.prokip.africa/sells
+   {
+     "locationId": "LOC001",
+     "items": [{
+       "sku": "SHIRT-001",
+       "quantity": 3
+     }]
+   }
+  ↓
+9. Prokip processes sale and returns sell_id
+  ↓
+10. Updates SalesLog with prokipSellId
+  ↓
+11. All stores now see updated inventory (3 less)
+```
+
+---
+
+### Scenario 3: Background Sync (Prokip → Stores)
+
+```
+Every 5 minutes, cron job runs:
+  ↓
+pollProkipToStores() executes
+  ↓
+1. Fetches ProkipConfig from database
+  ↓
+2. Calls Prokip API:
+   GET https://api.prokip.africa/inventory?locationId=LOC001
+   Returns: [
+     {sku: "SHIRT-001", quantity: 50},
+     {sku: "PANTS-002", quantity: 30}
+   ]
+  ↓
+3. Fetches all connections from database
+  ↓
+4. For each SKU:
+   - Compare Prokip quantity with InventoryCache
+   - If different:
+     a) Update InventoryCache
+     b) Push to Shopify:
+        PUT /admin/api/products/{id}/variants/{variant_id}.json
+        {inventory_quantity: 50}
+     c) Push to WooCommerce:
+        PUT /wp-json/wc/v3/products/{id}
+        {stock_quantity: 50}
+  ↓
+5. Update Connection.lastSync for each store
+  ↓
+6. All stores now have synchronized inventory!
+```
    Merchant selects: "PULL" (use Shopify products)
    Click: [Continue Setup]
 
@@ -549,21 +1018,291 @@ RESULT: Unified inventory across both platforms
 7. **SQL Injection Prevention**: Already using parameterized queries
 
 
-## Testing the System
+---
 
-### Test 1: Connect Store
+## 🧪 Testing the System
+
+### Prerequisites for Testing
 ```bash
-# Open browser
-http://localhost:3000
+# Ensure PostgreSQL is running
+sudo systemctl status postgresql
 
-# Click [Connect Shopify]
-# Choose a location
-# Complete setup wizard
-
-# Verify in database
-psql -h localhost -U postgres -d prokip_integration
-SELECT * FROM connections;
+# Ensure backend server is running
+cd backend
+npm start
 ```
+
+---
+
+### Test 1: User Registration & Authentication
+```bash
+# Register new user
+curl -X POST http://localhost:3000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser","password":"test123"}'
+
+# Expected: {"message":"User registered successfully"}
+
+# Login
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser","password":"test123"}'
+
+# Expected: {"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}
+# Save this token for subsequent requests
+```
+
+---
+
+### Test 2: Configure Prokip
+```bash
+# Set TOKEN variable from login response
+TOKEN="your_jwt_token_here"
+
+# Configure Prokip credentials
+curl -X POST http://localhost:3000/setup/prokip \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token":"prokip_api_token",
+    "apiUrl":"https://api.prokip.africa",
+    "locationId":"LOC001"
+  }'
+
+# Expected: {"message":"Prokip configured successfully"}
+```
+
+---
+
+### Test 3: Connect WooCommerce Store
+```bash
+curl -X POST http://localhost:3000/connections/woocommerce \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "storeUrl":"https://mystore.com",
+    "consumerKey":"ck_test_key",
+    "consumerSecret":"cs_test_secret"
+  }'
+
+# Expected: {"message":"WooCommerce store connected successfully"}
+```
+
+---
+
+### Test 4: List Connections
+```bash
+curl -X GET http://localhost:3000/connections \
+  -H "Authorization: Bearer $TOKEN"
+
+# Expected: Array of connections
+[
+  {
+    "id": 1,
+    "platform": "woocommerce",
+    "storeUrl": "https://mystore.com",
+    "lastSync": "2025-12-23T10:30:00Z"
+  }
+]
+```
+
+---
+
+### Test 5: Simulate Webhook (Order Placed)
+```bash
+# Simulate Shopify order webhook
+curl -X POST http://localhost:3000/connections/webhook/shopify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 123456789,
+    "line_items": [
+      {
+        "sku": "SHIRT-001",
+        "quantity": 5
+      }
+    ]
+  }'
+
+# Expected: 200 OK
+```
+
+---
+
+### Test 6: Verify Database Changes
+```bash
+# Connect to PostgreSQL
+psql -h localhost -U postgres -d prokip_integration
+
+# Check connections
+SELECT * FROM "Connection";
+
+# Check inventory cache
+SELECT * FROM "InventoryCache";
+
+# Check sales log
+SELECT * FROM "SalesLog";
+
+# Exit
+\q
+```
+
+---
+
+### Test 7: Manual Sync
+```bash
+curl -X POST http://localhost:3000/sync/manual \
+  -H "Authorization: Bearer $TOKEN"
+
+# Expected: {"message":"Sync completed successfully"}
+```
+
+---
+
+### Test 8: View Database with Prisma Studio
+```bash
+cd backend
+npx prisma studio
+
+# Opens GUI at http://localhost:5555
+# Explore all tables visually
+```
+
+
+## Security Best Practices
+
+### Current Implementation
+- **JWT Authentication**: Secure token-based auth
+- **Password Hashing**: bcrypt with salt rounds
+- **Environment Variables**: Credentials in .env (gitignored)
+- **Prisma ORM**: SQL injection prevention
+- **HTTPS-ready**: Can deploy with SSL/TLS
+
+### Production Recommendations
+
+1. **Stronger JWT Secrets**
+   ```bash
+   # Generate strong secret
+   node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+   ```
+
+2. **Rate Limiting**
+   ```javascript
+   npm install express-rate-limit
+   // Add to app.js
+   const rateLimit = require('express-rate-limit');
+   app.use('/auth', rateLimit({windowMs: 15*60*1000, max: 5}));
+   ```
+
+3. **CORS Configuration**
+   ```javascript
+   npm install cors
+   const cors = require('cors');
+   app.use(cors({origin: 'https://yourdomain.com'}));
+   ```
+
+4. **Helmet Security Headers**
+   ```javascript
+   npm install helmet
+   const helmet = require('helmet');
+   app.use(helmet());
+   ```
+
+5. **SSL/TLS Certificates**
+   - Use Let's Encrypt for free SSL
+   - Configure HTTPS in production
+
+6. **Database Security**
+   - Use strong PostgreSQL passwords
+   - Enable SSL for database connections
+   - Regular backups
+
+## Troubleshooting
+
+### Issue: "Prisma Client not generated"
+```bash
+cd backend
+npm run prisma:generate
+```
+
+### Issue: "Database connection failed"
+```bash
+# Check PostgreSQL is running
+sudo systemctl status postgresql
+
+# Verify DATABASE_URL in .env
+cat backend/.env | grep DATABASE_URL
+
+# Test connection
+psql -h localhost -U postgres -d prokip_integration
+```
+
+### Issue: "Port 3000 already in use"
+```bash
+# Find and kill process
+lsof -ti:3000 | xargs kill -9
+
+# Or change PORT in .env
+PORT=3001
+```
+
+### Issue: "JWT token invalid"
+```bash
+# Ensure JWT_SECRET matches in .env
+# Re-login to get new token
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"youruser","password":"yourpass"}'
+```
+
+## Database Management Commands
+
+```bash
+# View all tables
+psql -h localhost -U postgres -d prokip_integration -c "\dt"
+
+# Backup database
+pg_dump -h localhost -U postgres prokip_integration > backup.sql
+
+# Restore database
+psql -h localhost -U postgres prokip_integration < backup.sql
+
+# Reset database (deletes all data)
+cd backend
+npx prisma migrate reset
+
+# Create new migration
+npx prisma migrate dev --name add_new_feature
+
+# View migration history
+psql -h localhost -U postgres -d prokip_integration \
+  -c "SELECT * FROM _prisma_migrations;"
+```
+
+## Deployment Guide
+
+### Environment Setup
+1. **Production Database**: Use managed PostgreSQL (AWS RDS, DigitalOcean, etc.)
+2. **Environment Variables**: Set in production server
+3. **SSL Certificates**: Install Let's Encrypt
+4. **Process Manager**: Use PM2 for Node.js
+
+### PM2 Deployment
+```bash
+# Install PM2
+npm install -g pm2
+
+# Start application
+cd backend
+pm2 start src/app.js --name prokip-integration
+
+# Enable auto-restart on reboot
+pm2 startup
+pm2 save
+
+# Monitor
+pm2 monit
+```
+
 
 ### Test 2: Simulate Webhook (Sale)
 ```bash

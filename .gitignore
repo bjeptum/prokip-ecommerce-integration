@@ -1,44 +1,14 @@
-# Dependencies
-node_modules/
-package-lock.json
+# Ignore backend-specific files
+/backend/node_modules
+/backend/.env
 
-# Environment variables
+# Ignore frontend-specific files (useful once you add build tools)
+frontend/node_modules
+frontend/.env
+frontend/dist
+frontend/build
+
+# General
+node_modules
 .env
-.env.local
-.env.*.local
-
-# Database
-prisma/dev.db
-prisma/dev.db-journal
-*.db
-*.db-journal
-
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# OS
 .DS_Store
-Thumbs.db
-*.swp
-*.swo
-
-# IDE
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
-
-# Build
-dist/
-build/
-
-# Prisma
-prisma/migrations/**/migration.sql.bak
-
-# Testing
-coverage/
-.nyc_output/
