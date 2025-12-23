@@ -3,6 +3,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const { body, query, validationResult } = require('express-validator');
+const bodyParser = require('body-parser');
 const { registerShopifyWebhooks } = require('../services/shopifyService');
 const { registerWooWebhooks } = require('../services/wooService');
 const { processStoreToProkip } = require('../services/syncService');
