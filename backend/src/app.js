@@ -4,16 +4,33 @@ const path = require('path');
 const bodyParser = require('body-parser');
 const cron = require('node-cron');
 const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
 
 const authRoutes = require('./routes/authRoutes');
 const connectionRoutes = require('./routes/connectionRoutes');
 const setupRoutes = require('./routes/setupRoutes');
 const syncRoutes = require('./routes/syncRoutes');
+const webhookRoutes = require('./routes/webhookRoutes');
 const authMiddleware = require('./middlewares/authMiddleware');
 const { pollProkipToStores } = require('./services/syncService');
 
 const app = express();
 const prisma = new PrismaClient();
+
+// Ensure there is at least one admin user to allow login.
+async function ensureDefaultUser() {
+  const username = process.env.DEFAULT_ADMIN_USER;
+  const password = process.env.DEFAULT_ADMIN_PASS;
+
+  if (!username || !password) return; // user will have to register manually
+
+  const existing = await prisma.user.findUnique({ where: { username } });
+  if (existing) return;
+
+  const hashed = await bcrypt.hash(password, 10);
+  await prisma.user.create({ data: { username, password: hashed } });
+  console.log(`Default admin user '${username}' created from env DEFAULT_ADMIN_USER/DEFAULT_ADMIN_PASS`);
+}
 
 app.use(bodyParser.json());
 app.use(bodyParser.raw({ type: 'application/json' }));
@@ -23,6 +40,7 @@ app.use(express.static(path.join(__dirname, '../../frontend/public')));
 
 // Public routes
 app.use('/auth', authRoutes);
+app.use('/webhook', webhookRoutes);
 
 // Protected routes
 app.use('/connections', authMiddleware, connectionRoutes);
@@ -40,6 +58,7 @@ cron.schedule('*/5 * * * *', async () => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  await ensureDefaultUser();
   console.log(`Backend server running on http://localhost:${PORT}`);
 });
