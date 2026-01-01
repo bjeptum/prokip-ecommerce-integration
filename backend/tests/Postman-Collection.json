@@ -1,0 +1,667 @@
+{
+  "info": {
+    "name": "Prokip E-Commerce Integration - Full Test Suite",
+    "description": "Complete API testing collection for Prokip, Shopify, and WooCommerce integration with mock data",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{jwt_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "jwt_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "shopify_connection_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "woo_connection_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.collectionVariables.set('jwt_token', jsonData.token);",
+                  "    pm.environment.set('jwt_token', jsonData.token);",
+                  "    console.log('JWT Token saved:', jsonData.token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"securepassword123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Prokip Configuration",
+      "item": [
+        {
+          "name": "Get Prokip Config",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/prokip-config",
+              "host": ["{{base_url}}"],
+              "path": ["api", "prokip-config"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Set Prokip Config",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"apiKey\": \"mock_prokip_api_key_12345\",\n  \"baseUrl\": \"http://localhost:4000/connector/api\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/prokip-config",
+              "host": ["{{base_url}}"],
+              "path": ["api", "prokip-config"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Store Connections",
+      "item": [
+        {
+          "name": "Get All Connections",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/connections",
+              "host": ["{{base_url}}"],
+              "path": ["api", "connections"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Shopify Connection",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    var jsonData = pm.response.json();",
+                  "    if (jsonData.id) {",
+                  "        pm.collectionVariables.set('shopify_connection_id', jsonData.id);",
+                  "        console.log('Shopify Connection ID saved:', jsonData.id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"platform\": \"shopify\",\n  \"storeUrl\": \"test-store.myshopify.com\",\n  \"accessToken\": \"mock_shopify_access_token\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/connections",
+              "host": ["{{base_url}}"],
+              "path": ["api", "connections"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create WooCommerce Connection",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    var jsonData = pm.response.json();",
+                  "    if (jsonData.id) {",
+                  "        pm.collectionVariables.set('woo_connection_id', jsonData.id);",
+                  "        console.log('WooCommerce Connection ID saved:', jsonData.id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"platform\": \"woocommerce\",\n  \"storeUrl\": \"https://example.com\",\n  \"consumerKey\": \"ck_mock_key\",\n  \"consumerSecret\": \"cs_mock_secret\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/connections",
+              "host": ["{{base_url}}"],
+              "path": ["api", "connections"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Connection Status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/connections/{{shopify_connection_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "connections", "{{shopify_connection_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Connection",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/connections/1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "connections", "1"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Product Setup",
+      "item": [
+        {
+          "name": "Get All Products (Prokip + Stores)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/setup/products",
+              "host": ["{{base_url}}"],
+              "path": ["api", "setup", "products"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Push Products to Shopify",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"connectionId\": {{shopify_connection_id}},\n  \"productIds\": [\"PROD-001\", \"PROD-002\"]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/setup/products",
+              "host": ["{{base_url}}"],
+              "path": ["api", "setup", "products"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Push Products to WooCommerce",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"connectionId\": {{woo_connection_id}},\n  \"productIds\": [\"PROD-001\", \"PROD-003\"]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/setup/products",
+              "host": ["{{base_url}}"],
+              "path": ["api", "setup", "products"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Pull Inventory from Prokip",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/setup/pull-inventory",
+              "host": ["{{base_url}}"],
+              "path": ["api", "setup", "pull-inventory"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Sync Operations",
+      "item": [
+        {
+          "name": "Get Sync Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/sync/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sync", "status"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Pause Sync",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/sync/pause",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sync", "pause"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Resume Sync",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/sync/resume",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sync", "resume"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Manual Sync Now",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/sync/now",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sync", "now"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Webhooks (Shopify)",
+      "item": [
+        {
+          "name": "Shopify Order Created Webhook",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Shopify-Shop-Domain",
+                "value": "test-store.myshopify.com"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": 12345,\n  \"line_items\": [\n    {\n      \"sku\": \"PROD-001\",\n      \"quantity\": 2,\n      \"price\": \"25.00\"\n    }\n  ],\n  \"created_at\": \"2024-01-15T10:30:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/shopify/orders/create",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "shopify", "orders", "create"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shopify Product Update Webhook",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Shopify-Shop-Domain",
+                "value": "test-store.myshopify.com"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": 789,\n  \"variants\": [\n    {\n      \"sku\": \"PROD-002\",\n      \"inventory_quantity\": 50\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/shopify/products/update",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "shopify", "products", "update"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "7. Webhooks (WooCommerce)",
+      "item": [
+        {
+          "name": "WooCommerce Order Created Webhook",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": 456,\n  \"line_items\": [\n    {\n      \"sku\": \"PROD-003\",\n      \"quantity\": 1,\n      \"price\": 75\n    }\n  ],\n  \"date_created\": \"2024-01-15T11:00:00\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/woocommerce/order",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "woocommerce", "order"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "WooCommerce Product Update Webhook",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": 999,\n  \"sku\": \"PROD-001\",\n  \"stock_quantity\": 30\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/woocommerce/product",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "woocommerce", "product"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "8. Mock API Testing",
+      "item": [
+        {
+          "name": "Mock Prokip - Get Products",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock_prokip_api_key_12345",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:4000/connector/api/product",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "4000",
+              "path": ["connector", "api", "product"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mock Prokip - Get Stock Report",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock_prokip_api_key_12345",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:4000/connector/api/product-stock-report",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "4000",
+              "path": ["connector", "api", "product-stock-report"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mock Prokip - Record Sale",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock_prokip_api_key_12345",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reference\": \"ORDER-12345\",\n  \"date\": \"2024-01-15\",\n  \"items\": [\n    {\n      \"productId\": \"PROD-001\",\n      \"quantity\": 2,\n      \"unitPrice\": 25.00\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "http://localhost:4000/connector/api/sell",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "4000",
+              "path": ["connector", "api", "sell"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mock Shopify - Get Products",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Shopify-Access-Token",
+                "value": "mock_shopify_access_token"
+              }
+            ],
+            "url": {
+              "raw": "http://localhost:4001/admin/api/2026-01/products.json",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "4001",
+              "path": ["admin", "api", "2026-01", "products.json"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mock Shopify - Get Locations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Shopify-Access-Token",
+                "value": "mock_shopify_access_token"
+              }
+            ],
+            "url": {
+              "raw": "http://localhost:4001/admin/api/2026-01/locations.json",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "4001",
+              "path": ["admin", "api", "2026-01", "locations.json"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mock WooCommerce - Get Products",
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "ck_mock_key",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "cs_mock_secret",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:4002/wp-json/wc/v3/products",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "4002",
+              "path": ["wp-json", "wc", "v3", "products"]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

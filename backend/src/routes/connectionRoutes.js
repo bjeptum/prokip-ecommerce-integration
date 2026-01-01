@@ -139,12 +139,14 @@ router.get('/status', async (req, res) => {
 });
 
 // Disconnect store
-router.post('/disconnect', [
-  body('connectionId').isInt()
-], async (req, res) => {
-  const { connectionId } = req.body;
-  await prisma.connection.delete({ where: { id: parseInt(connectionId) } });
-  res.json({ success: true });
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await prisma.connection.delete({ where: { id: parseInt(id) } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to disconnect' });
+  }
 });
 
 module.exports = router;

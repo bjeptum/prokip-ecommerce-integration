@@ -3,10 +3,73 @@ const axios = require('axios');
 const { body, validationResult } = require('express-validator');
 const { PrismaClient } = require('@prisma/client');
 const { createProductInStore } = require('../services/storeService');
+const { getShopifyProducts } = require('../services/shopifyService');
+const { getWooProducts } = require('../services/wooService');
 
 const router = express.Router();
 const prisma = new PrismaClient();
-const PROKIP_BASE = process.env.PROKIP_API + '/connector/api/';
+const MOCK_MODE = process.env.MOCK_MODE === 'true';
+const PROKIP_BASE = MOCK_MODE 
+  ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'
+  : process.env.PROKIP_API + '/connector/api/';
+
+router.get('/products', async (req, res) => {
+  const connections = await prisma.connection.findMany();
+  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+
+  if (!prokip?.token) {
+    return res.status(400).json({ error: 'Prokip config missing' });
+  }
+
+  const headers = {
+    Authorization: `Bearer ${prokip.token}`,
+    Accept: 'application/json'
+  };
+
+  try {
+    const prokipRes = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
+    const prokipProducts = prokipRes.data.data.map(p => ({
+      source: 'prokip',
+      name: p.name,
+      sku: p.sku,
+      price: p.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0
+    }));
+
+    const storeProducts = [];
+    for (const conn of connections) {
+      try {
+        let products = [];
+        if (conn.platform === 'shopify') {
+          products = await getShopifyProducts(conn.storeUrl, conn.accessToken);
+          products = products.map(p => ({
+            source: 'store',
+            connectionId: conn.id,
+            name: p.title,
+            sku: p.variants[0]?.sku,
+            price: p.variants[0]?.price
+          }));
+        } else if (conn.platform === 'woocommerce') {
+          products = await getWooProducts(conn.storeUrl, conn.consumerKey, conn.consumerSecret);
+          products = products.map(p => ({
+            source: 'store',
+            connectionId: conn.id,
+            name: p.name,
+            sku: p.sku,
+            price: p.regular_price
+          }));
+        }
+        storeProducts.push(...products);
+      } catch (error) {
+        console.error(`Failed to fetch products from ${conn.platform}:`, error.message);
+      }
+    }
+
+    res.json({ prokipProducts, storeProducts });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to fetch products' });
+  }
+});
 
 router.post('/products', [
   body('method').isIn(['push', 'pull']),
@@ -48,6 +111,9 @@ router.post('/products', [
         };
 
         await createProductInStore(connection, storeProduct);
+        
+        // Rate limit: wait 500ms between requests
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
 
       res.json({ success: true, message: 'Products pushed successfully' });

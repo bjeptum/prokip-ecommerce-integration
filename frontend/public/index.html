@@ -45,13 +45,31 @@
       <section id="product-setup">
         <h2>Product Setup</h2>
         <select id="connection-select"></select>
-        <button onclick="pushProducts()">Push from Prokip → Store</button>
-        <button onclick="pullProducts()" disabled>Pull from Store → Prokip (Limited)</button>
+        <button onclick="loadProductSetup()">Load Products</button>
+        <div id="product-list" style="display:none;">
+          <h3>Choose Products to Sync</h3>
+          <table id="product-table">
+            <thead>
+              <tr>
+                <th>SKU</th>
+                <th>Name</th>
+                <th>Price</th>
+                <th>Source</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="product-tbody"></tbody>
+          </table>
+          <button onclick="pushSelectedProducts()">Push Selected to Store</button>
+        </div>
       </section>
 
       <section id="sync">
         <h2>Sync Control</h2>
         <button onclick="manualSync()">Sync Now</button>
+        <button onclick="pullOrders()">Pull Recent Orders</button>
+        <button onclick="pauseSync()">Pause Sync</button>
+        <button onclick="resumeSync()">Resume Sync</button>
         <div id="status-list"></div>
       </section>
     </div>

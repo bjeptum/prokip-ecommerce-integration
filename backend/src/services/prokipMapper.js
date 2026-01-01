@@ -2,7 +2,10 @@ const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
-const PROKIP_BASE = process.env.PROKIP_API + '/connector/api/';
+const MOCK_MODE = process.env.MOCK_MODE === 'true';
+const PROKIP_BASE = MOCK_MODE 
+  ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'
+  : process.env.PROKIP_API + '/connector/api/';
 
 async function getProkipProductIdBySku(sku) {
   const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });

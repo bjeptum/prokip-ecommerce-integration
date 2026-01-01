@@ -4,7 +4,10 @@ const { updateInventoryInStore } = require('./storeService');
 const { mapOrderToProkipSell, mapRefundToProkipProducts } = require('./prokipMapper');
 
 const prisma = new PrismaClient();
-const PROKIP_BASE = process.env.PROKIP_API + '/connector/api/';
+const MOCK_MODE = process.env.MOCK_MODE === 'true';
+const PROKIP_BASE = MOCK_MODE 
+  ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'
+  : process.env.PROKIP_API + '/connector/api/';
 
 async function processStoreToProkip(storeUrl, topic, data, platform) {
   const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
@@ -74,6 +77,7 @@ async function pollProkipToStores() {
     const connections = await prisma.connection.findMany();
 
     for (const conn of connections) {
+      if (!conn.syncEnabled) continue; // Skip if sync disabled
       const caches = await prisma.inventoryCache.findMany({ where: { connectionId: conn.id } });
 
       for (const item of stockData) {
