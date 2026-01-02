@@ -11,7 +11,23 @@ const { processStoreToProkip } = require('../services/syncService');
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Shopify OAuth start
+// Helper function to normalize Shopify store URL
+function normalizeShopifyUrl(storeUrl) {
+  // Remove any protocol
+  let normalized = storeUrl.replace(/^https?:\/\//, '');
+  
+  // Remove trailing slashes
+  normalized = normalized.replace(/\/+$/, '');
+  
+  // If it doesn't end with .myshopify.com, add it
+  if (!normalized.endsWith('.myshopify.com')) {
+    normalized = `${normalized}.myshopify.com`;
+  }
+  
+  return normalized;
+}
+
+// Shopify OAuth start (legacy)
 router.get('/shopify', [
   query('store').notEmpty()
 ], async (req, res) => {
@@ -27,12 +43,50 @@ router.get('/shopify', [
   res.redirect(authorizeUrl);
 });
 
-// Shopify OAuth callback
-router.get('/callback/shopify', async (req, res) => {
-  const { code, shop } = req.query;
-  if (!code || !shop) return res.status(400).send('Missing parameters');
+// New Shopify connection initiation endpoint
+router.post('/shopify/initiate', [
+  body('storeUrl').notEmpty()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   try {
+    const { storeUrl } = req.body;
+    
+    // Normalize the store URL
+    const normalizedUrl = normalizeShopifyUrl(storeUrl);
+    
+    const state = crypto.randomBytes(16).toString('hex');
+    const scopes = 'read_products,write_products,read_inventory,write_inventory,read_orders,write_orders';
+    const redirectUri = process.env.REDIRECT_URI || `http://localhost:${process.env.PORT}/connections/callback/shopify`;
+
+    const authorizeUrl = `https://${normalizedUrl}/admin/oauth/authorize?client_id=${process.env.SHOPIFY_CLIENT_ID}&scope=${scopes}&redirect_uri=${redirectUri}&state=${state}`;
+
+    res.json({ authUrl: authorizeUrl });
+  } catch (error) {
+    console.error('Error initiating Shopify connection:', error);
+    res.status(500).json({ error: 'Failed to initiate Shopify connection' });
+  }
+});
+
+// Shopify OAuth callback
+router.get('/callback/shopify', async (req, res) => {
+  const { code, shop, error, error_description } = req.query;
+  
+  // Handle user cancellation or errors from Shopify
+  if (error) {
+    const errorMsg = error_description || error;
+    console.error('Shopify OAuth error:', errorMsg);
+    return res.redirect(`/?shopify_error=${encodeURIComponent(errorMsg)}`);
+  }
+
+  if (!code || !shop) {
+    console.error('Missing OAuth parameters');
+    return res.redirect('/?shopify_error=Missing authorization parameters');
+  }
+
+  try {
+    // Exchange code for access token
     const tokenResponse = await axios.post(`https://${shop}/admin/oauth/access_token`, {
       client_id: process.env.SHOPIFY_CLIENT_ID,
       client_secret: process.env.SHOPIFY_CLIENT_SECRET,
@@ -41,19 +95,48 @@ router.get('/callback/shopify', async (req, res) => {
 
     const accessToken = tokenResponse.data.access_token;
 
-    await prisma.connection.create({
-      data: {
+    // Check if connection already exists
+    const existingConnection = await prisma.connection.findFirst({
+      where: {
         platform: 'shopify',
-        storeUrl: shop,
-        accessToken
+        storeUrl: shop
       }
     });
 
-    await registerShopifyWebhooks(shop, accessToken);
-    res.redirect('/?success=Shopify+connected');
+    if (existingConnection) {
+      // Update existing connection
+      await prisma.connection.update({
+        where: { id: existingConnection.id },
+        data: { accessToken, lastSync: new Date() }
+      });
+      console.log(`Updated Shopify connection for ${shop}`);
+    } else {
+      // Create new connection
+      await prisma.connection.create({
+        data: {
+          platform: 'shopify',
+          storeUrl: shop,
+          accessToken
+        }
+      });
+      console.log(`Created new Shopify connection for ${shop}`);
+    }
+
+    // Register webhooks
+    try {
+      await registerShopifyWebhooks(shop, accessToken);
+      console.log(`Registered webhooks for ${shop}`);
+    } catch (webhookError) {
+      console.error('Webhook registration failed:', webhookError.message);
+      // Don't fail the connection if webhooks fail
+    }
+
+    // Redirect to frontend with success message
+    res.redirect(`/?shopify_success=true&store=${encodeURIComponent(shop)}`);
   } catch (error) {
-    console.error(error);
-    res.status(500).send('Shopify connection failed');
+    console.error('Shopify connection error:', error.response?.data || error.message);
+    const errorMsg = error.response?.data?.error_description || error.message || 'Failed to connect Shopify store';
+    res.redirect(`/?shopify_error=${encodeURIComponent(errorMsg)}`);
   }
 });
 
@@ -87,18 +170,36 @@ router.post('/woocommerce', [
   const { storeUrl, consumerKey, consumerSecret } = req.body;
 
   try {
-    await prisma.connection.create({
-      data: {
+    // Check if connection already exists
+    const existingConnection = await prisma.connection.findFirst({
+      where: {
         platform: 'woocommerce',
-        storeUrl,
-        consumerKey,
-        consumerSecret
+        storeUrl
       }
     });
+
+    if (existingConnection) {
+      // Update existing connection
+      await prisma.connection.update({
+        where: { id: existingConnection.id },
+        data: { consumerKey, consumerSecret }
+      });
+    } else {
+      // Create new connection
+      await prisma.connection.create({
+        data: {
+          platform: 'woocommerce',
+          storeUrl,
+          consumerKey,
+          consumerSecret
+        }
+      });
+    }
 
     await registerWooWebhooks(storeUrl, consumerKey, consumerSecret);
     res.json({ success: true });
   } catch (error) {
+    console.error('WooCommerce connection error:', error);
     res.status(500).json({ error: 'Failed to connect WooCommerce' });
   }
 });
@@ -132,10 +233,36 @@ router.post('/prokip', [
   res.json({ success: true });
 });
 
-// Get connections status
+// Get connections status with enhanced data for dashboard
 router.get('/status', async (req, res) => {
-  const connections = await prisma.connection.findMany();
-  res.json(connections);
+  try {
+    const connections = await prisma.connection.findMany({
+      include: {
+        _count: {
+          select: {
+            InventoryCache: true,
+            SalesLog: true
+          }
+        }
+      }
+    });
+
+    // Enhance connections with additional data
+    const enhancedConnections = connections.map(conn => ({
+      id: conn.id,
+      platform: conn.platform,
+      storeUrl: conn.storeUrl,
+      lastSync: conn.lastSync,
+      syncEnabled: conn.syncEnabled,
+      productCount: conn._count.InventoryCache,
+      orderCount: conn._count.SalesLog
+    }));
+
+    res.json(enhancedConnections);
+  } catch (error) {
+    console.error('Error fetching connection status:', error);
+    res.status(500).json({ error: 'Failed to fetch connection status' });
+  }
 });
 
 // Disconnect store

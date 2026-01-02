@@ -16,7 +16,7 @@ model User {
 model Connection {
   id             Int              @id @default(autoincrement())
   platform       String
-  storeUrl       String           @unique
+  storeUrl       String
   accessToken    String?
   consumerKey    String?
   consumerSecret String?
@@ -24,6 +24,8 @@ model Connection {
   syncEnabled    Boolean          @default(true)
   InventoryCache InventoryCache[]
   SalesLog       SalesLog[]
+
+  @@unique([platform, storeUrl])
 }
 
 model InventoryCache {
