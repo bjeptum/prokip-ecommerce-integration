@@ -1,8 +1,8 @@
 const axios = require('axios');
 
-const MOCK_MODE = process.env.MOCK_MODE === 'true';
+const MOCK_WOO = process.env.MOCK_WOO === 'true';
 const getWooBaseUrl = (storeUrl) => {
-  if (MOCK_MODE) {
+  if (MOCK_WOO) {
     return process.env.MOCK_WOO_URL || 'http://localhost:4002';
   }
   return storeUrl;
@@ -105,5 +105,6 @@ module.exports = {
   getWooProducts, 
   createWooProduct, 
   updateWooInventory, 
-  getWooOrders 
+  getWooOrders,
+  getWooBaseUrl
 };

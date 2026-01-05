@@ -4,8 +4,8 @@ const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const { body, query, validationResult } = require('express-validator');
 const bodyParser = require('body-parser');
-const { registerShopifyWebhooks } = require('../services/shopifyService');
-const { registerWooWebhooks } = require('../services/wooService');
+const { registerShopifyWebhooks, getShopifyProducts, getShopifyOrders } = require('../services/shopifyService');
+const { registerWooWebhooks, getWooProducts, getWooOrders } = require('../services/wooService');
 const { processStoreToProkip } = require('../services/syncService');
 
 const router = express.Router();
@@ -238,26 +238,43 @@ router.post('/prokip', [
 // Get connections status with enhanced data for dashboard
 router.get('/status', async (req, res) => {
   try {
-    const connections = await prisma.connection.findMany({
-      include: {
-        _count: {
-          select: {
-            InventoryCache: true,
-            SalesLog: true
-          }
-        }
-      }
-    });
+    const connections = await prisma.connection.findMany();
 
-    // Enhance connections with additional data
-    const enhancedConnections = connections.map(conn => ({
-      id: conn.id,
-      platform: conn.platform,
-      storeUrl: conn.storeUrl,
-      lastSync: conn.lastSync,
-      syncEnabled: conn.syncEnabled,
-      productCount: conn._count.InventoryCache,
-      orderCount: conn._count.SalesLog
+    // Enhance connections with real-time data from stores
+    const enhancedConnections = await Promise.all(connections.map(async (conn) => {
+      let productCount = 0;
+      let orderCount = 0;
+
+      try {
+        if (conn.platform === 'shopify') {
+          const [products, orders] = await Promise.all([
+            getShopifyProducts(conn.storeUrl, conn.accessToken),
+            getShopifyOrders(conn.storeUrl, conn.accessToken)
+          ]);
+          productCount = products.length;
+          orderCount = orders.length;
+        } else if (conn.platform === 'woocommerce') {
+          const [products, orders] = await Promise.all([
+            getWooProducts(conn.storeUrl, conn.consumerKey, conn.consumerSecret),
+            getWooOrders(conn.storeUrl, conn.consumerKey, conn.consumerSecret)
+          ]);
+          productCount = products.length;
+          orderCount = orders.length;
+        }
+      } catch (error) {
+        console.error(`Failed to fetch data for ${conn.platform} store ${conn.storeUrl}:`, error.message);
+        // Keep counts at 0 if fetch fails
+      }
+
+      return {
+        id: conn.id,
+        platform: conn.platform,
+        storeUrl: conn.storeUrl,
+        lastSync: conn.lastSync,
+        syncEnabled: conn.syncEnabled,
+        productCount,
+        orderCount
+      };
     }));
 
     res.json(enhancedConnections);

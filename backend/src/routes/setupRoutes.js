@@ -8,8 +8,8 @@ const { getWooProducts } = require('../services/wooService');
 
 const router = express.Router();
 const prisma = new PrismaClient();
-const MOCK_MODE = process.env.MOCK_MODE === 'true';
-const PROKIP_BASE = MOCK_MODE 
+const MOCK_PROKIP = process.env.MOCK_PROKIP === 'true';
+const PROKIP_BASE = MOCK_PROKIP 
   ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'
   : process.env.PROKIP_API + '/connector/api/';
 

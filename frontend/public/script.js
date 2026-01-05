@@ -72,10 +72,16 @@ function handleOAuthCallback() {
 function showNotification(type, message) {
   const notification = document.createElement('div');
   notification.className = `notification notification-${type}`;
+  
+  // Convert \n to <br> for proper line breaks
+  const formattedMessage = message.replace(/\n/g, '<br>');
+  
   notification.innerHTML = `
     <div class="notification-content">
-      <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i>
-      <span>${message}</span>
+      <div class="notification-icon">
+        <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i>
+      </div>
+      <div class="notification-message">${formattedMessage}</div>
     </div>
     <button class="notification-close" onclick="this.parentElement.remove()">
       <i class="fas fa-times"></i>
@@ -84,11 +90,11 @@ function showNotification(type, message) {
   
   document.body.appendChild(notification);
   
-  // Auto-remove after 5 seconds
+  // Auto-remove after 6 seconds
   setTimeout(() => {
     notification.classList.add('notification-fade-out');
     setTimeout(() => notification.remove(), 300);
-  }, 5000);
+  }, 6000);
 }
 
 // API call helper
@@ -655,34 +661,53 @@ function displayProducts(products) {
   const content = document.getElementById('products-content');
   
   if (products.length === 0) {
-    content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">No products found</p>';
+    content.innerHTML = `
+      <div class="empty-state-card">
+        <div class="empty-state-icon">
+          <i class="fas fa-box-open"></i>
+        </div>
+        <h3>No Products Found</h3>
+        <p>This store doesn't have any products yet. Click "Sync Products" to push products from Prokip.</p>
+      </div>
+    `;
     return;
   }
 
   content.innerHTML = `
-    <div class="table-responsive">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Product Name</th>
-            <th>SKU</th>
-            <th>Price</th>
-            <th>Stock</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${products.map(product => `
+    <div class="content-card">
+      <div class="card-header">
+        <h3><i class="fas fa-box"></i> Product Catalog</h3>
+        <span class="badge">${products.length} ${products.length === 1 ? 'Product' : 'Products'}</span>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
             <tr>
-              <td>${product.name || 'N/A'}</td>
-              <td>${product.sku || 'N/A'}</td>
-              <td>$${product.price || '0.00'}</td>
-              <td>${product.stock || '0'}</td>
-              <td><span class="status-badge ${product.synced ? 'status-success' : 'status-warning'}">${product.synced ? 'Synced' : 'Pending'}</span></td>
+              <th>Product Name</th>
+              <th>SKU</th>
+              <th>Price</th>
+              <th>Stock</th>
+              <th>Status</th>
             </tr>
-          `).join('')}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            ${products.map(product => `
+              <tr>
+                <td>
+                  <div class="product-cell">
+                    <div class="product-icon"><i class="fas fa-cube"></i></div>
+                    <strong>${product.name || product.title || 'Untitled Product'}</strong>
+                  </div>
+                </td>
+                <td><code class="sku-code">${product.sku || 'N/A'}</code></td>
+                <td><strong class="price-text">$${parseFloat(product.price || 0).toFixed(2)}</strong></td>
+                <td><span class="stock-badge ${(product.stock || 0) > 0 ? 'stock-in' : 'stock-out'}">${product.stock || 0} units</span></td>
+                <td><span class="status-badge ${product.synced ? 'status-success' : 'status-warning'}">${product.synced ? 'Synced' : 'Pending'}</span></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
 }
@@ -709,49 +734,125 @@ function displayOrders(orders) {
   const content = document.getElementById('orders-content');
   
   if (orders.length === 0) {
-    content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">No orders found</p>';
+    content.innerHTML = `
+      <div class="empty-state-card">
+        <div class="empty-state-icon">
+          <i class="fas fa-receipt"></i>
+        </div>
+        <h3>No Orders Found</h3>
+        <p>This store doesn't have any orders yet. Orders will appear here automatically via webhooks.</p>
+      </div>
+    `;
     return;
   }
 
+  const totalRevenue = orders.reduce((sum, order) => sum + parseFloat(order.total || 0), 0);
+
   content.innerHTML = `
-    <div class="table-responsive">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Order ID</th>
-            <th>Customer</th>
-            <th>Date</th>
-            <th>Total</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${orders.map(order => `
+    <div class="content-card">
+      <div class="card-header">
+        <h3><i class="fas fa-shopping-cart"></i> Order History</h3>
+        <div class="header-stats">
+          <span class="badge">${orders.length} ${orders.length === 1 ? 'Order' : 'Orders'}</span>
+          <span class="revenue-badge">Total: $${totalRevenue.toFixed(2)}</span>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
             <tr>
-              <td>${order.orderId || 'N/A'}</td>
-              <td>${order.customer || 'N/A'}</td>
-              <td>${order.date ? new Date(order.date).toLocaleDateString() : 'N/A'}</td>
-              <td>$${order.total || '0.00'}</td>
-              <td><span class="status-badge status-success">${order.status || 'Completed'}</span></td>
+              <th>Order ID</th>
+              <th>Customer</th>
+              <th>Date</th>
+              <th>Total</th>
+              <th>Status</th>
             </tr>
-          `).join('')}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            ${orders.map(order => `
+              <tr>
+                <td><code class="order-id">#${order.orderId || order.id || 'N/A'}</code></td>
+                <td>
+                  <div class="customer-cell">
+                    <i class="fas fa-user-circle"></i>
+                    <span>${order.customer || order.customer_name || 'Guest'}</span>
+                  </div>
+                </td>
+                <td>${order.date || order.created_at ? new Date(order.date || order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}</td>
+                <td><strong class="price-text">$${parseFloat(order.total || order.total_price || 0).toFixed(2)}</strong></td>
+                <td><span class="status-badge status-success">${order.status || order.financial_status || 'Completed'}</span></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
 }
 
 async function loadStoreAnalytics() {
+  const content = document.getElementById('analytics-content');
+  content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center; color: var(--gray-500);">Loading analytics...</p>';
+  
   try {
     // Get analytics from the store endpoint
     const res = await apiCall(`/stores/${selectedStore.id}/analytics`);
     if (res.ok) {
       const analytics = await res.json();
-      document.getElementById('store-synced-products').textContent = analytics.syncedProducts || 0;
-      document.getElementById('store-orders-processed').textContent = analytics.ordersProcessed || 0;
+      
+      content.innerHTML = `
+        <div class="analytics-grid">
+          <div class="analytics-card">
+            <div class="analytics-icon" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+              <i class="fas fa-box"></i>
+            </div>
+            <div class="analytics-content">
+              <div class="analytics-number">${analytics.syncedProducts || 0}</div>
+              <div class="analytics-label">Synced Products</div>
+              <div class="analytics-trend"><i class="fas fa-arrow-up"></i> Active</div>
+            </div>
+          </div>
+          
+          <div class="analytics-card">
+            <div class="analytics-icon" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+              <i class="fas fa-shopping-cart"></i>
+            </div>
+            <div class="analytics-content">
+              <div class="analytics-number">${analytics.ordersProcessed || 0}</div>
+              <div class="analytics-label">Orders Processed</div>
+              <div class="analytics-trend"><i class="fas fa-check-circle"></i> Synced</div>
+            </div>
+          </div>
+          
+          <div class="analytics-card">
+            <div class="analytics-icon" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+              <i class="fas fa-sync"></i>
+            </div>
+            <div class="analytics-content">
+              <div class="analytics-number">${analytics.lastSyncTime ? 'Active' : 'Pending'}</div>
+              <div class="analytics-label">Sync Status</div>
+              <div class="analytics-trend">${analytics.lastSyncTime ? new Date(analytics.lastSyncTime).toLocaleString() : 'Not synced yet'}</div>
+            </div>
+          </div>
+          
+          <div class="analytics-card">
+            <div class="analytics-icon" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
+              <i class="fas fa-database"></i>
+            </div>
+            <div class="analytics-content">
+              <div class="analytics-number">${selectedStore.platform}</div>
+              <div class="analytics-label">Platform</div>
+              <div class="analytics-trend"><i class="fas fa-plug"></i> Connected</div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      content.innerHTML = '<div class="empty-state-card"><h3>Unable to load analytics</h3><p>Please try again later</p></div>';
     }
   } catch (error) {
     console.error('Failed to load analytics:', error);
+    content.innerHTML = '<div class="empty-state-card"><h3>Error loading analytics</h3><p>Please check your connection and try again</p></div>';
   }
 }
 

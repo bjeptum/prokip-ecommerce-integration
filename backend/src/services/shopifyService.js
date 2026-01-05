@@ -1,8 +1,8 @@
 const axios = require('axios');
 
-const MOCK_MODE = process.env.MOCK_MODE === 'true';
+const MOCK_SHOPIFY = process.env.MOCK_SHOPIFY === 'true';
 const getShopifyBaseUrl = (shop) => {
-  if (MOCK_MODE) {
+  if (MOCK_SHOPIFY) {
     return process.env.MOCK_SHOPIFY_URL || 'http://localhost:4001';
   }
   return `https://${shop}`;
@@ -143,5 +143,6 @@ module.exports = {
   createShopifyProduct, 
   updateShopifyInventory, 
   getShopifyLocations,
-  getShopifyOrders
+  getShopifyOrders,
+  getShopifyBaseUrl
 };
