@@ -1,707 +1,644 @@
-# Implementation Guide: Prokip API Integration
+# Implementation Guide - Backend Architecture
 
 ## Overview
-This guide walks you through implementing the Prokip integration properly by:
-1. Testing the real Prokip API
-2. Documenting actual responses
-3. Creating local mock API that matches real responses
-4. Testing locally
-5. Switching to live API
+
+This guide covers the backend implementation of the Prokip E-commerce Integration system, including architecture, API endpoints, services, and integration patterns.
 
 ---
 
-## Phase 1: Test Real Prokip API (You - Backend)
+## Architecture
 
-### Step 1: Get Prokip Credentials
-Contact Prokip to get:
-- ✅ API Token
-- ✅ Base URL (likely `https://api.prokip.africa`)
-- ✅ Location/Branch ID
-- ✅ API Documentation
+### Technology Stack
 
-### Step 2: Test All Endpoints
-
-```bash
-cd backend/tests
-
-# Follow the guide in prokip-api-testing.md
-# This will help you test and document all endpoints
+```
+┌─────────────────────────────────────────────────┐
+│              Frontend Dashboard                  │
+│         (HTML/CSS/JavaScript)                    │
+└──────────────────┬──────────────────────────────┘
+                   │ HTTPS/JWT
+                   ▼
+┌─────────────────────────────────────────────────┐
+│           Express.js Backend                     │
+│   ┌───────────┐  ┌──────────┐  ┌─────────────┐ │
+│   │   Routes  │  │ Services │  │ Middlewares │ │
+│   └───────────┘  └──────────┘  └─────────────┘ │
+└──────────────────┬──────────────────────────────┘
+                   │ Prisma ORM
+                   ▼
+┌─────────────────────────────────────────────────┐
+│         PostgreSQL Database                      │
+│   User | Connection | InventoryCache             │
+│   SalesLog | ProkipConfig                        │
+└─────────────────────────────────────────────────┘
+         │               │               │
+         ▼               ▼               ▼
+┌──────────────┐ ┌────────────┐ ┌──────────────┐
+│ Shopify API  │ │ WooCommerce│ │  Prokip API  │
+│   (OAuth)    │ │   (REST)   │ │   (Bearer)   │
+└──────────────┘ └────────────┘ └──────────────┘
 ```
 
-**Critical endpoints to test:**
-1. **GET Products** - `/connector/api/product`
-2. **GET Inventory** - `/connector/api/inventory`
-3. **POST Create Sale** - `/connector/api/sells`
-4. **POST Refund** - `/connector/api/sells/{id}/refund`
+### Project Structure
 
-### Step 3: Document Actual Responses
+```
+backend/
+├── src/
+│   ├── app.js                  # Express application entry point
+│   ├── routes/
+│   │   ├── authRoutes.js       # Login/register endpoints
+│   │   ├── connectionRoutes.js # Store connection management
+│   │   ├── setupRoutes.js      # Product setup and mapping
+│   │   ├── syncRoutes.js       # Sync control and status
+│   │   └── webhookRoutes.js    # Webhook receivers
+│   ├── services/
+│   │   ├── shopifyService.js   # Shopify API integration
+│   │   ├── wooService.js       # WooCommerce API integration
+│   │   ├── prokipMapper.js     # Prokip API integration
+│   │   ├── storeService.js     # Store operations
+│   │   └── syncService.js      # Sync logic
+│   └── middlewares/
+│       └── authMiddleware.js   # JWT validation
+├── prisma/
+│   ├── schema.prisma           # Database schema
+│   └── migrations/             # Migration history
+├── tests/
+│   └── mock-servers.js         # Mock API servers
+├── lib/
+│   ├── prisma.js               # Prisma client instance
+│   └── validation.js           # Input validators
+├── .env                        # Environment configuration
+└── package.json                # Dependencies
+```
 
-Create `backend/tests/prokip-api-documentation.md` with:
+---
 
-```markdown
-## Get Products Endpoint
+## Database Schema
+
+### User Table
+Stores authentication credentials for dashboard access.
+
+```prisma
+model User {
+  id       Int    @id @default(autoincrement())
+  username String @unique
+  password String  // bcrypt hashed
+}
+```
+
+**Usage:**
+- Login to dashboard
+- API authentication via JWT
+
+### Connection Table
+Stores e-commerce store connections with platform-specific credentials.
+
+```prisma
+model Connection {
+  id             Int              @id @default(autoincrement())
+  platform       String           // 'shopify' or 'woocommerce'
+  storeUrl       String
+  accessToken    String?          // Shopify OAuth token
+  consumerKey    String?          // WooCommerce key
+  consumerSecret String?          // WooCommerce secret
+  lastSync       DateTime?
+  syncEnabled    Boolean          @default(true)
+  InventoryCache InventoryCache[]
+  SalesLog       SalesLog[]
+  
+  @@unique([platform, storeUrl])  // Allow same URL for different platforms
+}
+```
+
+**Relationships:**
+- One connection → Many inventory cache entries
+- One connection → Many sales logs
+
+### InventoryCache Table
+Tracks SKU-level inventory for each connected store.
+
+```prisma
+model InventoryCache {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  sku          String
+  quantity     Int
+  connection   Connection @relation(fields: [connectionId], references: [id])
+}
+```
+
+**Purpose:**
+- Store inventory snapshots
+- Compare with Prokip inventory
+- Determine what needs syncing
+
+### SalesLog Table
+Audit trail of all sales processed from stores.
+
+```prisma
+model SalesLog {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  orderId      String     // Store's order ID
+  prokipSellId String?    // Prokip's sale ID
+  timestamp    DateTime   @default(now())
+  connection   Connection @relation(fields: [connectionId], references: [id])
+}
+```
+
+**Purpose:**
+- Track processed orders
+- Prevent duplicate sales
+- Audit trail
+
+### ProkipConfig Table
+Stores Prokip API credentials (singleton pattern).
+
+```prisma
+model ProkipConfig {
+  id         Int    @id @default(1)
+  token      String
+  apiUrl     String
+  locationId String
+}
+```
+
+**Purpose:**
+- Central Prokip API configuration
+- Used by all sync operations
+
+---
+
+## API Endpoints
+
+### Authentication Routes
+**Base:** `/auth`
+
+#### POST /auth/register
+Create new user account.
 
 **Request:**
-```
-GET https://api.prokip.africa/connector/api/product?per_page=-1
-Headers:
-  Authorization: Bearer {token}
-  Accept: application/json
-```
-
-**Response 200:**
 ```json
 {
-  // PASTE ACTUAL RESPONSE HERE
+  "username": "admin",
+  "password": "password123"
 }
 ```
 
-**Response 401:**
+**Response:**
 ```json
 {
-  // PASTE ACTUAL ERROR RESPONSE HERE
+  "message": "User registered successfully"
 }
 ```
-```
 
-Do this for ALL endpoints you'll use.
+#### POST /auth/login
+Authenticate and receive JWT token.
 
-### Step 4: Save Response Samples
-
-Save actual API responses as JSON files:
-```bash
-backend/tests/
-├── prokip-products-response.json
-├── prokip-inventory-response.json
-├── prokip-create-sale-response.json
-├── prokip-refund-response.json
-└── prokip-api-documentation.md
-```
-
----
-
-## Phase 2: Update Local Mock API (You - Backend)
-
-### Step 1: Update Mock API to Match Real API
-
-Based on your documented responses, update `backend/tests/mock-prokip-api.js`:
-
-```javascript
-// Example: If real Prokip returns this structure:
+**Request:**
+```json
 {
-  "success": true,
-  "data": [...],
-  "pagination": {...}
-}
-
-// Make sure your mock returns THE SAME structure
-```
-
-### Step 2: Run Mock API Locally
-
-```bash
-# Terminal 1: Start mock Prokip API
-cd backend
-node tests/mock-prokip-api.js
-
-# Should show:
-# Mock Prokip API running on http://localhost:4000
-```
-
-### Step 3: Configure Your App to Use Mock API
-
-```bash
-# backend/.env
-PROKIP_API=http://localhost:4000
-PROKIP_TOKEN=mock_prokip_token_123
-PROKIP_LOCATION=LOC001
-```
-
----
-
-## Phase 3: Update Your Integration Code (You - Backend)
-
-### Step 1: Update Service Files to Match Real API
-
-Review and update these files based on actual Prokip API responses:
-
-**File: `backend/src/services/prokipMapper.js`**
-```javascript
-// Update this to match ACTUAL Prokip response structure
-function mapProkipProductToStore(prokipProduct) {
-  return {
-    title: prokipProduct.name,  // Verify this field name is correct
-    sku: prokipProduct.sku,     // Verify this field name is correct
-    price: prokipProduct.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0,
-    // Add more fields based on actual response
-  };
+  "username": "admin",
+  "password": "password123"
 }
 ```
 
-**File: `backend/src/services/syncService.js`**
-```javascript
-async function pollProkipToStores() {
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
-  
-  // Update endpoint path if different
-  const response = await axios.get(
-    `${prokip.apiUrl}/connector/api/inventory?location_id=${prokip.locationId}`,
-    {
-      headers: {
-        Authorization: `Bearer ${prokip.token}`,
-        Accept: 'application/json'
-      }
-    }
-  );
-  
-  // Update based on actual response structure
-  const inventory = response.data.data; // or response.data depending on actual API
-  
-  // Rest of your logic...
-}
-```
-
-### Step 2: Add Proper Error Handling
-
-```javascript
-try {
-  const response = await axios.get(prokipUrl, { headers });
-  
-  // Handle different response formats
-  if (!response.data.success) {
-    throw new Error(response.data.message || 'Prokip API error');
+**Response:**
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": 1,
+    "username": "admin"
   }
-  
-  return response.data.data;
-} catch (error) {
-  console.error('Prokip API Error:', {
-    status: error.response?.status,
-    message: error.response?.data?.message,
-    url: prokipUrl
-  });
-  throw error;
-}
-```
-
-### Step 3: Update Webhook Processing
-
-**File: `backend/src/services/syncService.js`**
-
-Make sure the sale creation matches Prokip's expected format:
-
-```javascript
-async function processStoreToProkip(storeUrl, topic, data, platform) {
-  // ... existing code ...
-  
-  // Update this to match Prokip's expected request format
-  const prokipSaleData = {
-    location_id: prokipConfig.locationId,
-    contact_id: 'walk-in-customer', // or map from order data
-    transaction_date: new Date().toISOString(),
-    items: lineItems.map(item => ({
-      product_id: item.product_id,  // You may need to map SKU to product_id
-      variation_id: item.variation_id,
-      quantity: item.quantity,
-      unit_price: item.price
-    }))
-  };
-  
-  const response = await axios.post(
-    `${prokipConfig.apiUrl}/connector/api/sells`,
-    prokipSaleData,
-    {
-      headers: {
-        Authorization: `Bearer ${prokipConfig.token}`,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
-  
-  // Update based on actual response
-  const sellId = response.data.data.sell_id;
-  
-  // Save to SalesLog...
 }
 ```
 
 ---
 
-## Phase 4: Test Locally (You - Backend)
+### Connection Routes
+**Base:** `/connections`
 
-### Step 1: Start All Services
-
-```bash
-# Terminal 1: Mock Prokip API
-cd backend
-node tests/mock-prokip-api.js
-
-# Terminal 2: Your Backend
-cd backend
-npm start
-
-# Terminal 3: Test commands
-```
-
-### Step 2: Test Full Flow
-
-```bash
-# 1. Register & Login
-TOKEN=$(curl -s -X POST http://localhost:3000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"test123"}' | jq -r '.token')
-
-# 2. Configure Prokip (using mock API)
-curl -X POST http://localhost:3000/connections/prokip \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "token": "mock_prokip_token_123",
-    "locationId": "LOC001"
-  }'
-
-# 3. Connect WooCommerce store
-curl -X POST http://localhost:3000/connections/woocommerce \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "storeUrl": "https://test-store.com",
-    "consumerKey": "ck_test",
-    "consumerSecret": "cs_test"
-  }'
-
-# 4. Push products from Prokip to store
-curl -X POST http://localhost:3000/setup/products \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "push",
-    "connectionId": 1
-  }'
-
-# 5. Simulate order webhook
-curl -X POST http://localhost:3000/connections/webhook/woocommerce \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": 12345,
-    "line_items": [
-      {
-        "sku": "TSHIRT-001",
-        "quantity": 2
-      }
-    ]
-  }'
-
-# 6. Trigger manual sync
-curl -X POST http://localhost:3000/sync \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### Step 3: Verify Database
-
-```bash
-psql -h localhost -U postgres -d prokip_integration
-
-SELECT * FROM "Connection";
-SELECT * FROM "InventoryCache";
-SELECT * FROM "SalesLog";
-```
-
----
-
-## Phase 5: Switch to Live Prokip API (You - Backend)
-
-Once everything works with mock API:
-
-### Step 1: Update Environment Variables
-
-```bash
-# backend/.env
-PROKIP_API=https://api.prokip.africa
-PROKIP_TOKEN=your_real_prokip_token_here
-PROKIP_LOCATION=your_real_location_id
-```
-
-### Step 2: Test with Live API
-
-```bash
-# Restart your backend
-npm start
-
-# Test the same flow as Phase 4, but now hitting real Prokip API
-```
-
-### Step 3: Monitor Logs
-
-```bash
-# Watch for any errors
-tail -f logs/app.log
-
-# Or add logging to console
-console.log('Prokip API Response:', response.data);
-```
-
----
-
-## What to Share with Frontend Developer
-
-### 1. API Documentation
-
-Create `FRONTEND_API_DOCS.md`:
-
-```markdown
-# Frontend API Documentation
-
-## Base URL
-```
-http://localhost:3000
-```
-
-## Authentication
-
-All protected endpoints require JWT token in header:
-```
-Authorization: Bearer {token}
-```
-
-## Endpoints
-
-### 1. Register User
-**POST** `/auth/register`
+#### POST /connections/shopify/initiate
+Start Shopify OAuth flow.
 
 **Request:**
 ```json
 {
-  "username": "string",
-  "password": "string (min 6 chars)"
+  "storeUrl": "mystore"  // or "mystore.myshopify.com"
 }
 ```
 
-**Response 200:**
+**Response:**
 ```json
 {
-  "success": true,
-  "message": "User registered"
+  "authUrl": "https://mystore.myshopify.com/admin/oauth/authorize?client_id=..."
 }
 ```
 
-### 2. Login
-**POST** `/auth/login`
+**Frontend Action:** Redirect user to `authUrl`
+
+#### GET /connections/callback/shopify
+OAuth callback endpoint (Shopify redirects here).
+
+**Query Parameters:**
+- `code` - Authorization code from Shopify
+- `shop` - Store domain
+- `error` - Error code (if user cancelled)
+- `error_description` - Error details
+
+**Success:** Redirects to `/?shopify_success=true&store={shop}`
+**Error:** Redirects to `/?shopify_error={message}`
+
+#### POST /connections/woocommerce
+Connect WooCommerce store.
 
 **Request:**
 ```json
 {
-  "username": "string",
-  "password": "string"
+  "storeUrl": "https://mystore.com",
+  "consumerKey": "ck_...",
+  "consumerSecret": "cs_..."
 }
 ```
 
-**Response 200:**
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
-
-### 3. Configure Prokip
-**POST** `/connections/prokip` 🔒
-
-**Request:**
-```json
-{
-  "token": "string",
-  "locationId": "string"
-}
-```
-
-**Response 200:**
+**Response:**
 ```json
 {
   "success": true
 }
 ```
 
-### 4. Connect Shopify
-**GET** `/connections/shopify?store={shop-url}` 🔒
-
-**Redirects to Shopify OAuth**
-
-### 5. Connect WooCommerce
-**POST** `/connections/woocommerce` 🔒
+#### POST /connections/prokip
+Configure Prokip API credentials.
 
 **Request:**
 ```json
 {
-  "storeUrl": "https://example.com",
-  "consumerKey": "ck_xxxxx",
-  "consumerSecret": "cs_xxxxx"
+  "token": "Bearer xyz...",
+  "locationId": "1"
 }
 ```
 
-**Response 200:**
+**Response:**
 ```json
 {
   "success": true
 }
 ```
 
-### 6. Get All Connections
-**GET** `/connections/status` 🔒
+#### DELETE /connections/:id
+Disconnect a store.
 
-**Response 200:**
+**Response:**
+```json
+{
+  "success": true
+}
+```
+
+---
+
+### Sync Routes
+**Base:** `/sync`
+
+#### GET /sync/status
+Get all connections with sync status.
+
+**Response:**
 ```json
 [
   {
     "id": 1,
     "platform": "shopify",
     "storeUrl": "mystore.myshopify.com",
-    "lastSync": "2025-12-28T10:30:00Z"
+    "lastSync": "2026-01-05T10:30:00.000Z",
+    "syncEnabled": true,
+    "productCount": 45,
+    "orderCount": 123
   }
 ]
 ```
 
-### 7. Disconnect Store
-**POST** `/connections/disconnect` 🔒
+#### POST /sync
+Trigger manual sync for all stores.
 
-**Request:**
+**Response:**
 ```json
 {
-  "connectionId": 1
+  "message": "Sync initiated for all stores"
 }
 ```
 
-**Response 200:**
+#### POST /sync/pull-orders
+Pull recent orders from stores to Prokip.
+
+**Response:**
 ```json
 {
-  "success": true
+  "message": "Orders pulled successfully",
+  "count": 5
 }
 ```
 
-### 8. Push Products
-**POST** `/setup/products` 🔒
+#### POST /sync/pause
+Pause automatic syncing.
 
-**Request:**
+#### POST /sync/resume
+Resume automatic syncing.
+
+---
+
+### Webhook Routes
+**Base:** `/connections/webhook`
+
+#### POST /connections/webhook/shopify
+Receive webhooks from Shopify.
+
+**Headers:**
+- `X-Shopify-Topic` - Event type (e.g., "orders/create")
+- `X-Shopify-Shop-Domain` - Store domain
+- `X-Shopify-Hmac-Sha256` - HMAC signature for verification
+
+**Body:** Raw JSON from Shopify
+
+**Supported Topics:**
+- `orders/create` - New order created
+- `orders/updated` - Order modified
+- `orders/cancelled` - Order cancelled
+- `products/update` - Product changed
+
+#### POST /connections/webhook/woocommerce
+Receive webhooks from WooCommerce.
+
+**Body:**
 ```json
 {
-  "method": "push",
-  "connectionId": 1
+  "topic": "order.created",
+  "resource": {
+    // WooCommerce order data
+  }
 }
 ```
 
-**Response 200:**
-```json
-{
-  "success": true,
-  "message": "Products pushed successfully"
+---
+
+## Services
+
+### shopifyService.js
+Handles all Shopify API interactions.
+
+**Key Functions:**
+
+```javascript
+// Register webhooks for a store
+async function registerShopifyWebhooks(shop, accessToken)
+
+// Get all products from Shopify
+async function getShopifyProducts(shop, accessToken)
+
+// Create product in Shopify
+async function createShopifyProduct(shop, accessToken, product)
+
+// Update inventory quantity
+async function updateShopifyInventory(shop, accessToken, inventoryItemId, locationId, quantity)
+
+// Get store locations
+async function getShopifyLocations(shop, accessToken)
+```
+
+**API Version:** 2026-01
+**Base URL Pattern:** `https://{shop}/admin/api/2026-01/`
+
+### wooService.js
+Handles WooCommerce REST API integration.
+
+**Key Functions:**
+
+```javascript
+// Register webhooks
+async function registerWooWebhooks(storeUrl, consumerKey, consumerSecret)
+
+// Get products
+async function getWooProducts(storeUrl, consumerKey, consumerSecret)
+
+// Create product
+async function createWooProduct(storeUrl, consumerKey, consumerSecret, product)
+
+// Update inventory
+async function updateWooInventory(storeUrl, consumerKey, consumerSecret, productId, quantity)
+```
+
+**Authentication:** Basic Auth (Base64 encoded `key:secret`)
+**Base URL Pattern:** `{storeUrl}/wp-json/wc/v3/`
+
+### prokipMapper.js
+Integrates with Prokip API.
+
+**Key Functions:**
+
+```javascript
+// Get products from Prokip
+async function getProkipProducts(locationId)
+
+// Record sale in Prokip
+async function sendSaleToProkip(saleData)
+
+// Update Prokip inventory
+async function updateProkipInventory(sku, quantity, locationId)
+```
+
+**Authentication:** Bearer token
+**Base URL:** `https://api.prokip.africa`
+
+### syncService.js
+Core synchronization logic.
+
+**Key Function:**
+
+```javascript
+async function processStoreToProkip(storeUrl, topic, data, platform)
+```
+
+**Flow:**
+1. Receive webhook from store
+2. Parse order data
+3. Extract SKU and quantity
+4. Check if order already processed (SalesLog)
+5. Send sale to Prokip
+6. Update inventory cache
+7. Log transaction
+
+---
+
+## Background Jobs
+
+### Inventory Sync Cron Job
+
+**Schedule:** Every 5 minutes
+**Implementation:** node-cron
+
+```javascript
+cron.schedule('*/5 * * * *', async () => {
+  // 1. Get Prokip products and inventory
+  const prokipProducts = await getProkipProducts(locationId);
+  
+  // 2. Get all active connections
+  const connections = await prisma.connection.findMany({
+    where: { syncEnabled: true }
+  });
+  
+  // 3. For each connection
+  for (const conn of connections) {
+    // 4. Compare Prokip inventory with store inventory
+    // 5. Push updates to store if differences found
+  }
+});
+```
+
+---
+
+## Authentication & Security
+
+### JWT Middleware
+
+```javascript
+function authMiddleware(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
 }
 ```
 
-### 9. Manual Sync
-**POST** `/sync` 🔒
+**Protected Routes:**
+- All `/connections/*` endpoints
+- All `/sync/*` endpoints
+- All `/setup/*` endpoints
 
-**Response 200:**
-```json
+### Password Hashing
+
+```javascript
+const hashedPassword = await bcrypt.hash(password, 10);
+const isMatch = await bcrypt.compare(inputPassword, storedHash);
+```
+
+---
+
+## Error Handling
+
+### OAuth Errors
+
+```javascript
+// User cancels authorization
+/?shopify_error=access_denied
+
+// Invalid credentials
+/?shopify_error=Failed to exchange authorization code
+
+// Store already connected
+// Updates existing connection instead of failing
+```
+
+### API Errors
+
+```javascript
 {
-  "success": true,
-  "message": "Manual sync triggered"
+  "error": "Error message",
+  "details": "Additional context"
 }
 ```
 
-## Error Responses
-
-All errors follow this format:
-```json
-{
-  "error": "Error message here",
-  "details": "Additional details if available"
-}
-```
-
-Common status codes:
-- `400` - Bad request (validation error)
-- `401` - Unauthorized (missing/invalid token)
-- `404` - Not found
+**HTTP Status Codes:**
+- `200` - Success
+- `400` - Bad request / validation error
+- `401` - Unauthorized
 - `500` - Server error
-```
 
-### 2. Frontend Implementation Checklist
+---
 
-Share this with frontend dev:
+## Environment Variables
 
-```markdown
-# Frontend Implementation Checklist
+Required configuration in `.env`:
 
-## Required Changes
+```dotenv
+# Database
+DATABASE_URL=postgresql://...
 
-### 1. Update API Endpoints
-- [ ] Change base URL to point to backend server
-- [ ] Update all endpoint paths to match backend routes
-- [ ] Add proper error handling for all API calls
+# Server
+PORT=3000
+NODE_ENV=development
 
-### 2. Authentication Flow
-- [ ] Implement login form
-- [ ] Store JWT token in localStorage/sessionStorage
-- [ ] Add token to all API requests
-- [ ] Handle token expiration (401 responses)
-- [ ] Implement logout functionality
+# Shopify
+SHOPIFY_CLIENT_ID=api_key
+SHOPIFY_CLIENT_SECRET=api_secret
+REDIRECT_URI=https://prokip.local/connections/callback/shopify
+WEBHOOK_URL=https://prokip.local/connections/webhook/shopify
 
-### 3. Connection Management
-- [ ] Update Shopify OAuth redirect handling
-- [ ] Update WooCommerce connection form
-- [ ] Display connection status from API
-- [ ] Add disconnect functionality
-- [ ] Show last sync timestamp
+# Prokip
+PROKIP_API=https://api.prokip.africa
 
-### 4. Sync Features
-- [ ] Add manual sync button
-- [ ] Show sync status/loading states
-- [ ] Display sync results/errors
-- [ ] Auto-refresh connection status
-
-### 5. Error Handling
-- [ ] Display validation errors from API
-- [ ] Show user-friendly error messages
-- [ ] Handle network errors
-- [ ] Add retry logic for failed requests
-
-## Example Code
-
-### Store JWT Token
-```javascript
-// After login
-const response = await fetch('http://localhost:3000/auth/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ username, password })
-});
-
-const data = await response.json();
-if (data.token) {
-  sessionStorage.setItem('jwt_token', data.token);
-}
-```
-
-### Make Authenticated Request
-```javascript
-const token = sessionStorage.getItem('jwt_token');
-
-const response = await fetch('http://localhost:3000/connections/status', {
-  headers: {
-    'Authorization': `Bearer ${token}`
-  }
-});
-
-if (response.status === 401) {
-  // Token expired, redirect to login
-  window.location.href = '/login.html';
-}
-
-const connections = await response.json();
-```
-
-### Handle Errors
-```javascript
-try {
-  const response = await fetch(url, options);
-  
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Request failed');
-  }
-  
-  const data = await response.json();
-  return data;
-} catch (error) {
-  console.error('API Error:', error);
-  alert(`Error: ${error.message}`);
-}
-```
-```
-
-### 3. Testing Instructions for Frontend
-
-```markdown
-# Frontend Testing Guide
-
-## Setup Backend for Testing
-
-1. Start mock Prokip API:
-   ```bash
-   cd backend
-   node tests/mock-prokip-api.js
-   ```
-
-2. Start backend server:
-   ```bash
-   cd backend
-   npm start
-   ```
-
-3. Backend will be available at: `http://localhost:3000`
-
-## Test Scenarios
-
-### Scenario 1: User Registration & Login
-1. Go to login page
-2. Register new user
-3. Login with credentials
-4. Verify token is stored
-5. Verify protected pages are accessible
-
-### Scenario 2: Connect Stores
-1. Login first
-2. Configure Prokip credentials
-3. Connect WooCommerce store
-4. Verify connection appears in list
-5. Check last sync timestamp
-
-### Scenario 3: Manual Sync
-1. Click sync button
-2. Verify loading state shows
-3. Check for success message
-4. Verify timestamp updates
-
-## Test Credentials
-
-**Mock Prokip API:**
-- Token: `mock_prokip_token_123`
-- Location: `LOC001`
-
-**Test User:**
-- Username: `admin`
-- Password: `test123`
+# Security
+JWT_SECRET=random_secret_string
 ```
 
 ---
 
-## Summary Checklist
+## Testing
 
-### For You (Backend Developer):
+### Mock Mode
 
-- [ ] Test real Prokip API endpoints
-- [ ] Document all request/response formats
-- [ ] Save response samples as JSON files
-- [ ] Update mock API to match real API
-- [ ] Update integration code to match real API
-- [ ] Test locally with mock API
-- [ ] Switch to live API
-- [ ] Create API documentation for frontend
-- [ ] Share testing guide with frontend dev
+Set `MOCK_MODE=true` to use local mock servers instead of real APIs.
 
-### For Frontend Developer:
+**Mock Servers:**
+- Prokip: `http://localhost:4000`
+- Shopify: `http://localhost:4001`
+- WooCommerce: `http://localhost:4002`
 
-- [ ] Update API base URL
-- [ ] Implement JWT authentication
-- [ ] Update all API calls to match backend
-- [ ] Add error handling
-- [ ] Test with backend server
-- [ ] Implement new features based on API capabilities
+See [MOCK_SERVER_TESTING.md](MOCK_SERVER_TESTING.md) for details.
 
 ---
 
-## Next Steps
+## Performance Considerations
 
-1. **Today**: Test real Prokip API and document responses
-2. **Day 2**: Update mock API and integration code
-3. **Day 3**: Test locally with mock API
-4. **Day 4**: Switch to live API and test
-5. **Day 5**: Share docs with frontend dev and support integration
+### Database Indexing
+- `User.username` - Unique index for fast login
+- `Connection.[platform, storeUrl]` - Composite unique index
+- Foreign key indexes automatically created by Prisma
+
+### Connection Pooling
+Prisma manages connection pool automatically:
+- Default pool size: 10
+- Can be configured via DATABASE_URL parameters
+
+### Caching Strategy
+- `InventoryCache` table stores last known inventory
+- Reduces API calls to Prokip
+- Only sync differences
+
+---
+
+## Deployment
+
+### Production Checklist
+- [ ] Set strong `JWT_SECRET`
+- [ ] Use environment-specific DATABASE_URL
+- [ ] Configure HTTPS reverse proxy
+- [ ] Update redirect URIs
+- [ ] Enable PostgreSQL SSL
+- [ ] Set up process manager (PM2)
+- [ ] Configure log rotation
+- [ ] Set up monitoring
+- [ ] Test webhook delivery
+
+---
+
+**For frontend implementation details, see [FRONTEND_IMPLEMENTATION_GUIDE.md](FRONTEND_IMPLEMENTATION_GUIDE.md)**

@@ -1,103 +1,310 @@
 # Prokip E-commerce Integration System
 
 ## Project Overview
-This repository contains a **production-ready** Prokip E-commerce Integration system.  
-It connects **Shopify** and **WooCommerce** stores with **real-time, two-way product, sales, and inventory synchronization**.
+A **production-ready** e-commerce integration platform that connects **Shopify** and **WooCommerce** stores with the Prokip inventory management system. Features real-time bidirectional synchronization, OAuth authentication, and a modern web-based dashboard.
 
-The system is built with **Node.js**, **Express.js**, **Prisma ORM**, and **PostgreSQL**, providing enterprise-grade data persistence, transaction safety, and scalability.  
-It implements all core requirements for multi-store e-commerce integration with unified inventory management across multiple platforms.
+Built with **Node.js**, **Express.js**, **Prisma ORM**, and **PostgreSQL** for enterprise-grade reliability and scalability.
 
-This project is ready for deployment and provides a solid foundation for production use with real OAuth integrations, JWT authentication, and automated background sync jobs.
+---
 
+## ✨ Key Features
 
-## Features Implemented
+### 🔌 Multi-Platform Integration
+- **Shopify**: Full OAuth 2.0 integration with automatic webhook registration
+- **WooCommerce**: REST API v3 with Consumer Key/Secret authentication
+- **Multiple Stores**: Connect unlimited stores from both platforms simultaneously
+- **Platform Agnostic**: Each store operates independently with unified inventory
 
-### Core Integration Features
-- **Multi-store Support**: Connect unlimited Shopify and WooCommerce stores
-- **Multi-location Management**: Different stores for different business locations
-- **OAuth Authentication**: Real Shopify OAuth flow integration
-- **WooCommerce REST API**: Consumer key/secret authentication
-- **JWT-based Security**: Protected API endpoints with token authentication
-- **User Management**: Secure registration and login system
-- **Bi-directional Sync**: 
-  - **Store → Prokip**: Sales from stores update Prokip inventory
-  - **Prokip → Stores**: Inventory changes in Prokip push to all stores
+### 🔄 Real-Time Synchronization
+- **Bidirectional Sync**: 
+  - Orders from stores → Update Prokip inventory
+  - Prokip inventory changes → Push to all connected stores
+- **Webhook-Driven**: Instant order processing via platform webhooks
+- **Background Jobs**: Automated inventory sync every 5 minutes
+- **Manual Sync**: On-demand synchronization from dashboard
 
-### Real-time Synchronization
-- **Webhook Integration**: Instant order processing from Shopify/WooCommerce
-- **Automatic Inventory Updates**: Sales reduce inventory across all platforms
-- **Scheduled Polling**: Cron jobs sync Prokip inventory to stores every 5 minutes
-- **Refund Handling**: Returns automatically restore inventory
-- **Transaction Safety**: Prisma ORM with PostgreSQL ACID transactions
-- **Unified Inventory**: Single source of truth in Prokip
+### 🎨 Modern Web Dashboard
+- **Prokip-Themed UI**: Professional interface matching Prokip's branding
+- **Dashboard Analytics**: View connected stores, synced products, and order counts
+- **Module Settings**: Sidebar access to connection management
+- **One-Click OAuth**: Streamlined Shopify connection via standard OAuth flow
+- **Loading States**: Visual feedback during API operations
+- **Smart Notifications**: Success/error messages with auto-dismiss
 
-### Management Dashboard
-- **Connection Overview**: View all connected stores at a glance
-- **Store Status**: See connection health and last sync time
-- **Manual Sync**: Force immediate synchronization on demand
-- **Secure Access**: Login required to manage connections
-- **REST API**: Complete API for programmatic access
+### 🔐 Security & Authentication
+- **JWT Authentication**: Secure API access with token-based auth
+- **User Management**: Login system for dashboard access
+- **OAuth 2.0**: Industry-standard Shopify app installation
+- **Encrypted Credentials**: Secure storage of API keys and tokens
+- **CSRF Protection**: State parameter validation in OAuth flow
 
-### Data & Persistence
-- **PostgreSQL Database**: Production-grade RDBMS with ACID compliance
-- **Prisma ORM**: Type-safe database queries with migrations
-- **Five Core Tables**: 
-  - `User` - Authentication
-  - `Connection` - Store configurations
-  - `InventoryCache` - SKU-level inventory tracking
-  - `SalesLog` - Audit trail of all sales
-  - `ProkipConfig` - Prokip API credentials
-- **Environment-based Config**: `.env` file for secure credential management
-- **Cross-platform Support**: Works on Windows, Linux, and macOS
+### 📊 Data Management
+- **PostgreSQL Database**: ACID-compliant data persistence
+- **Prisma ORM**: Type-safe database queries with automated migrations
+- **Inventory Tracking**: SKU-level stock management across all platforms
+- **Sales Logging**: Complete audit trail of all transactions
+- **Connection Management**: Store configurations and sync status
 
-## Tech Stack
+---
+
+## 🏗️ Tech Stack
 
 ### Backend
-- **Framework**: Express.js 4.18+
-- **Database**: PostgreSQL 12+ (Production-ready RDBMS)
-- **ORM**: Prisma 5.7+ (Type-safe database access)
 - **Runtime**: Node.js v16+
+- **Framework**: Express.js 4.18+
+- **Database**: PostgreSQL 12+
+- **ORM**: Prisma 5.22+
 - **Authentication**: JWT (jsonwebtoken) + bcryptjs
-- **Background Jobs**: node-cron (scheduled sync tasks)
-- **HTTP Client**: Axios (API requests to Shopify/WooCommerce/Prokip)
+- **Job Scheduler**: node-cron
+- **HTTP Client**: Axios
 - **Validation**: express-validator
-- **OAuth**: oauth package (for Shopify OAuth flow)
-- **Environment Config**: dotenv
 
 ### Frontend
-- **UI**: Vanilla HTML5, CSS3, JavaScript
-- **Design**: Modern responsive interface
-- **API Communication**: Fetch API
-- **Authentication**: Session storage for JWT tokens
+- **UI**: HTML5, CSS3, Modern JavaScript (ES6+)
+- **Design**: Responsive CSS Grid/Flexbox
+- **Icons**: Font Awesome 6
+- **API**: Native Fetch API
+- **Storage**: LocalStorage for auth tokens
 
-### Database Schema (Prisma)
+### External APIs
+- **Shopify**: Admin REST API 2026-01 + OAuth 2.0
+- **WooCommerce**: REST API v3
+- **Prokip**: REST API at api.prokip.africa
+
+---
+
+## 📋 Database Schema
 
 ```prisma
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
 model User {
-  id       Int     @id @default(autoincrement())
-  username String  @unique
-  password String  // bcrypt hashed
+  id       Int    @id @default(autoincrement())
+  username String @unique
+  password String // bcrypt hashed
 }
 
 model Connection {
-  id             Int       @id @default(autoincrement())
-  platform       String    // 'shopify' or 'woocommerce'
-  storeUrl       String    @unique
-  accessToken    String?   // Shopify OAuth token
-  consumerKey    String?   // WooCommerce key
-  consumerSecret String?   // WooCommerce secret
+  id             Int              @id @default(autoincrement())
+  platform       String           // 'shopify' or 'woocommerce'
+  storeUrl       String
+  accessToken    String?          // Shopify OAuth token
+  consumerKey    String?          // WooCommerce key
+  consumerSecret String?          // WooCommerce secret
   lastSync       DateTime?
+  syncEnabled    Boolean          @default(true)
   InventoryCache InventoryCache[]
   SalesLog       SalesLog[]
+  
+  @@unique([platform, storeUrl])
 }
 
 model InventoryCache {
   id           Int        @id @default(autoincrement())
+  connectionId Int
+  sku          String
+  quantity     Int
+  connection   Connection @relation(fields: [connectionId], references: [id])
+}
+
+model SalesLog {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  orderId      String
+  prokipSellId String?
+  timestamp    DateTime   @default(now())
+  connection   Connection @relation(fields: [connectionId], references: [id])
+}
+
+model ProkipConfig {
+  id         Int    @id @default(1)
+  token      String
+  apiUrl     String
+  locationId String
+}
+```
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Node.js v16 or higher
+- PostgreSQL 12 or higher
+- Shopify Partner account (for app credentials)
+- WooCommerce store with REST API enabled (optional)
+
+### Installation
+
+1. **Clone the repository**
+```bash
+git clone <repository-url>
+cd prokip-ecommerce-integration
+```
+
+2. **Install dependencies**
+```bash
+cd backend
+npm install
+```
+
+3. **Configure environment**
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+4. **Setup database**
+```bash
+npx prisma migrate dev
+```
+
+5. **Start the server**
+```bash
+npm start
+```
+
+6. **Access the dashboard**
+```
+https://prokip.local  (or your configured domain)
+```
+
+Default login: `admin` / `admin123`
+
+---
+
+## 📚 Documentation
+
+- **[SETUP.md](SETUP.md)** - Detailed installation and configuration guide
+- **[IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)** - Backend architecture and API reference
+- **[FRONTEND_IMPLEMENTATION_GUIDE.md](FRONTEND_IMPLEMENTATION_GUIDE.md)** - Frontend structure and UI components
+- **[MOCK_SERVER_TESTING.md](MOCK_SERVER_TESTING.md)** - Testing with mock APIs
+
+---
+
+## 🔧 Configuration
+
+### Shopify Setup
+1. Create app in [Shopify Partners Dashboard](https://partners.shopify.com)
+2. Set **App URL**: `https://prokip.local`
+3. Set **Redirect URL**: `https://prokip.local/connections/callback/shopify`
+4. Configure scopes: `read_products,write_products,read_inventory,write_inventory,read_orders,write_orders,read_fulfillments,write_fulfillments`
+5. Copy API credentials to `.env`
+
+### WooCommerce Setup
+1. Navigate to WordPress Admin → WooCommerce → Settings → Advanced → REST API
+2. Click "Add Key"
+3. Set permissions to "Read/Write"
+4. Copy Consumer Key and Secret to connection form
+
+---
+
+## 🎯 Usage
+
+### Connecting a Shopify Store
+1. Login to dashboard
+2. Click profile → "Module Settings"
+3. Click "Connect Shopify"
+4. Enter store URL (e.g., `mystore` or `mystore.myshopify.com`)
+5. Authorize on Shopify
+6. Redirected back with success notification
+
+### Connecting a WooCommerce Store
+1. Login to dashboard
+2. Click profile → "Module Settings"
+3. Click "Connect WooCommerce"
+4. Enter store URL, Consumer Key, and Consumer Secret
+5. Click "Connect Store"
+
+### Managing Inventory
+- **Auto Sync**: Runs every 5 minutes via cron job
+- **Manual Sync**: Click "Sync Now" in dashboard
+- **View Status**: Check connected stores and sync times
+- **Disconnect**: Remove store connections as needed
+
+---
+
+## Project Structure
+
+```
+prokip-ecommerce-integration/
+├── backend/
+│   ├── src/
+│   │   ├── routes/          # API endpoints
+│   │   ├── services/        # Business logic
+│   │   ├── middlewares/     # Auth & validation
+│   │   └── app.js          # Express app
+│   ├── prisma/
+│   │   ├── schema.prisma   # Database schema
+│   │   └── migrations/     # DB migrations
+│   ├── tests/
+│   │   └── mock-servers.js # Testing infrastructure
+│   └── package.json
+├── frontend/
+│   └── public/
+│       ├── index.html      # Dashboard UI
+│       ├── script.js       # Frontend logic
+│       └── styles.css      # Styling
+└── README.md
+```
+
+---
+
+## Testing
+
+### Mock Mode
+Enable mock servers for local testing without real API credentials:
+
+```bash
+# In .env
+MOCK_MODE=true
+
+# Start mock servers
+node backend/tests/mock-servers.js
+```
+
+See [MOCK_SERVER_TESTING.md](MOCK_SERVER_TESTING.md) for details.
+
+---
+
+## 🔐 Security Features
+
+- JWT-based authentication with secure token storage
+- bcrypt password hashing
+- OAuth 2.0 state parameter for CSRF protection
+- Environment-based credential management
+- Input validation on all API endpoints
+- HTTPS required for production webhooks
+
+---
+
+## 📦 Deployment Considerations
+
+### Production Checklist
+- [ ] Update `JWT_SECRET` to strong random value
+- [ ] Configure HTTPS with valid SSL certificate
+- [ ] Update redirect URIs in Shopify app settings
+- [ ] Set `NODE_ENV=production`
+- [ ] Configure PostgreSQL connection pooling
+- [ ] Set up process manager (PM2, systemd)
+- [ ] Configure reverse proxy (Nginx, Caddy)
+- [ ] Enable database backups
+- [ ] Set up monitoring and logging
+- [ ] Review and update CORS settings
+
+---
+
+## 🤝 Support
+
+For issues, questions, or contributions, please refer to the project documentation or contact the development team.
+
+---
+
+## 📄 License
+
+[Your License Here]
+
+---
+
+**Built with for Prokip**
   connectionId Int
   sku          String
   quantity     Int
