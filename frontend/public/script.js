@@ -1,18 +1,34 @@
 let token = '';
 let currentUser = null;
+let currentBusinessLocation = null;
+let businessLocations = [];
+let prokipToken = null;
+let selectedStore = null;
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
-  // Check if user is already logged in
-  const savedToken = localStorage.getItem('authToken');
-  if (savedToken) {
-    token = savedToken;
-    showDashboard();
-    // Check for OAuth callback
-    handleOAuthCallback();
-  } else {
-    showLogin();
+  // Check if returning from OAuth callback
+  const urlParams = new URLSearchParams(window.location.search);
+  const hasOAuthParams = urlParams.has('shopify_success') || urlParams.has('shopify_error') || urlParams.has('code') || urlParams.has('shop');
+  
+  // If returning from OAuth, check for existing session
+  if (hasOAuthParams) {
+    const savedToken = localStorage.getItem('authToken');
+    if (savedToken) {
+      token = savedToken;
+      currentUser = { username: 'admin' }; // You might want to decode the JWT to get actual username
+      handleOAuthCallback();
+      showDashboard();
+      return;
+    }
   }
+  
+  // Otherwise, always show login screen initially (user requirement)
+  // Remove auto-login even if token exists
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('businessLocation');
+  localStorage.removeItem('prokipToken');
+  showLogin();
 });
 
 // Handle OAuth callback from Shopify
@@ -22,7 +38,16 @@ function handleOAuthCallback() {
   // Check for Shopify success
   if (urlParams.has('shopify_success')) {
     const store = urlParams.get('store');
-    showNotification('success', `Successfully connected to Shopify store: ${store}`);
+    const webhooks = urlParams.get('webhooks');
+    
+    let message = `Successfully connected to Shopify store: ${store}`;
+    if (webhooks === 'success') {
+      message += '\n✓ Webhooks registered successfully';
+    } else if (webhooks === 'failed') {
+      message += '\n⚠️ Webhook registration failed (this is optional)';
+    }
+    
+    showNotification('success', message);
     // Clean URL
     window.history.replaceState({}, document.title, '/');
     // Refresh dashboard data
@@ -34,8 +59,12 @@ function handleOAuthCallback() {
   if (urlParams.has('shopify_error')) {
     const error = urlParams.get('shopify_error');
     showNotification('error', `Shopify connection failed: ${error}`);
-    // Clean URL
+    // Clean URL and ensure we're on home page
     window.history.replaceState({}, document.title, '/');
+    // Make sure user stays on dashboard
+    if (token) {
+      navigateTo('home');
+    }
   }
 }
 
@@ -81,6 +110,26 @@ async function apiCall(endpoint, options = {}) {
   return response;
 }
 
+// Prokip API call helper
+async function prokipApiCall(endpoint, options = {}) {
+  if (!prokipToken) {
+    showNotification('error', 'Please select a business location first');
+    return;
+  }
+
+  const response = await fetch(`https://api.prokip.africa${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'Authorization': `Bearer ${prokipToken}`,
+      ...options.headers
+    }
+  });
+
+  return response;
+}
+
 // Authentication functions
 async function login() {
   const username = document.getElementById('username').value;
@@ -102,9 +151,12 @@ async function login() {
 
     if (res.ok) {
       token = data.token;
-      currentUser = data.user;
+      currentUser = { username };
       localStorage.setItem('authToken', token);
-      showDashboard();
+      
+      // Prokip API is configured on the backend
+      // Just load business locations after successful login
+      await loadBusinessLocations();
     } else {
       document.getElementById('login-error').textContent = data.error || 'Login failed';
     }
@@ -113,34 +165,166 @@ async function login() {
   }
 }
 
+// Load business locations (mock for now since not using actual Prokip API)
+async function loadBusinessLocations() {
+  // Mock business locations for development
+  // In production, these would come from Prokip API
+  businessLocations = [
+    {
+      id: 1,
+      name: 'Main Store',
+      city: 'Nairobi',
+      state: 'Kenya',
+      mobile: '+254 712 345 678'
+    },
+    {
+      id: 2,
+      name: 'Branch Store',
+      city: 'Mombasa',
+      state: 'Kenya',
+      mobile: '+254 722 345 678'
+    },
+    {
+      id: 3,
+      name: 'Warehouse',
+      city: 'Kisumu',
+      state: 'Kenya',
+      mobile: '+254 732 345 678'
+    }
+  ];
+  
+  showBusinessLocationSelection();
+}
+
+// Show business location selection screen
+function showBusinessLocationSelection() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('location-selection-screen').style.display = 'flex';
+  document.getElementById('dashboard').style.display = 'none';
+
+  const locationsGrid = document.getElementById('locations-grid');
+  locationsGrid.innerHTML = '';
+
+  businessLocations.forEach(location => {
+    const locationCard = document.createElement('div');
+    locationCard.className = 'location-card';
+    locationCard.onclick = () => selectBusinessLocation(location);
+
+    locationCard.innerHTML = `
+      <div class="location-icon">
+        <i class="fas fa-building"></i>
+      </div>
+      <div class="location-info">
+        <h3>${location.name}</h3>
+        <p><i class="fas fa-map-marker-alt"></i> ${location.city || 'N/A'}, ${location.state || 'N/A'}</p>
+        <p><i class="fas fa-phone"></i> ${location.mobile || 'No phone'}</p>
+      </div>
+      <div class="location-action">
+        <i class="fas fa-arrow-right"></i>
+      </div>
+    `;
+
+    locationsGrid.appendChild(locationCard);
+  });
+}
+
+// Select a business location
+function selectBusinessLocation(location) {
+  currentBusinessLocation = location;
+  localStorage.setItem('businessLocation', JSON.stringify(location));
+  
+  // Update profile display
+  document.getElementById('profile-username').textContent = currentUser.username;
+  document.getElementById('profile-location').textContent = location.name;
+
+  showDashboard();
+}
+
+// Change business location
+function changeBusinessLocation() {
+  selectedStore = null;
+  toggleProfileMenu();
+  showBusinessLocationSelection();
+}
+
 function logout() {
   token = '';
   currentUser = null;
+  currentBusinessLocation = null;
+  prokipToken = null;
+  selectedStore = null;
+  businessLocations = [];
+  
   localStorage.removeItem('authToken');
+  localStorage.removeItem('businessLocation');
+  localStorage.removeItem('prokipToken');
+  
   showLogin();
 }
 
 function showLogin() {
   document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('location-selection-screen').style.display = 'none';
   document.getElementById('dashboard').style.display = 'none';
+  
+  // Clear form
+  document.getElementById('username').value = '';
+  document.getElementById('password').value = '';
+  document.getElementById('login-error').textContent = '';
 }
 
 function showDashboard() {
   document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('location-selection-screen').style.display = 'none';
   document.getElementById('dashboard').style.display = 'flex';
+  
+  navigateTo('home');
   loadDashboardData();
+  loadConnectedStores();
 }
 
 // Navigation functions
+function navigateTo(pageName) {
+  // Hide all pages
+  document.querySelectorAll('.page').forEach(page => {
+    page.classList.remove('active');
+  });
+
+  // Remove active class from all menu items
+  document.querySelectorAll('.menu-item').forEach(item => {
+    item.classList.remove('active');
+  });
+
+  // Show selected page
+  const pageElement = document.getElementById(`${pageName}-page`);
+  if (pageElement) {
+    pageElement.classList.add('active');
+  }
+
+  // Add active class to selected menu item
+  const menuItem = document.querySelector(`[data-page="${pageName}"]`);
+  if (menuItem) {
+    menuItem.classList.add('active');
+  }
+
+  // Load page-specific data
+  if (pageName === 'home') {
+    loadDashboardData();
+  } else if (pageName === 'settings') {
+    loadConnectedStores();
+  } else if (pageName.startsWith('store-')) {
+    if (!selectedStore) {
+      showNotification('error', 'Please select a store first');
+      navigateTo('home');
+      return;
+    }
+    loadStoreSpecificData(pageName);
+  }
+}
+
 function toggleProfileMenu() {
   const dropdown = document.getElementById('profile-dropdown');
   dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
-}
-
-function showModuleSettings() {
-  document.getElementById('module-settings-modal').classList.add('show');
-  document.getElementById('profile-dropdown').style.display = 'none';
-  loadConnectedStores();
 }
 
 function closeModal() {
@@ -150,12 +334,10 @@ function closeModal() {
 }
 
 function connectShopify() {
-  document.getElementById('module-settings-modal').classList.remove('show');
   document.getElementById('shopify-modal').classList.add('show');
 }
 
 function connectWooCommerce() {
-  document.getElementById('module-settings-modal').classList.remove('show');
   document.getElementById('woocommerce-modal').classList.add('show');
 }
 
@@ -244,6 +426,7 @@ async function loadDashboardData() {
 
     if (res.ok) {
       updateDashboardStats(data);
+      updateStoresOverview(data);
       updateActivityFeed(data);
     }
   } catch (error) {
@@ -260,6 +443,66 @@ function updateDashboardStats(data) {
   document.getElementById('total-products').textContent = totalProducts;
   document.getElementById('total-orders').textContent = totalOrders;
   document.getElementById('sync-status').textContent = 'Active';
+}
+
+function updateStoresOverview(stores) {
+  const grid = document.getElementById('stores-overview-grid');
+  
+  if (stores.length === 0) {
+    grid.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-store-slash"></i>
+        <h3>No Stores Connected</h3>
+        <p>Connect your first e-commerce store to get started</p>
+        <button onclick="navigateTo('settings')" class="btn-primary">
+          <i class="fas fa-plus"></i> Connect Store
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  grid.innerHTML = stores.map(store => {
+    const platform = store.platform.toLowerCase();
+    const iconClass = platform === 'shopify' ? 'fab fa-shopify' : 'fas fa-shopping-cart';
+    const iconBg = platform === 'shopify' ? '#96BF48' : '#96588A';
+
+    return `
+      <div class="store-overview-card" onclick="viewStore(${store.id}, '${store.platform}', '${store.storeUrl}')">
+        <div class="store-overview-icon" style="background: ${iconBg};">
+          <i class="${iconClass}"></i>
+        </div>
+        <div class="store-overview-info">
+          <h3>${store.platform}</h3>
+          <p>${store.storeUrl}</p>
+        </div>
+        <div class="store-overview-stats">
+          <div class="stat-item">
+            <span class="stat-value">${store.productCount || 0}</span>
+            <span class="stat-label">Products</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value">${store.orderCount || 0}</span>
+            <span class="stat-label">Orders</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function viewStore(storeId, platform, storeUrl) {
+  console.log('viewStore called with:', { storeId, platform, storeUrl });
+  selectedStore = { id: storeId, platform, storeUrl };
+  
+  // Show store menu section
+  document.getElementById('store-menu-section').style.display = 'block';
+  
+  // Navigate to store products page
+  navigateTo('store-products');
+  
+  // Update the page subtitle
+  document.getElementById('store-products-subtitle').textContent = `${platform} - ${storeUrl}`;
 }
 
 function updateActivityFeed(data) {
@@ -356,6 +599,13 @@ async function disconnectStore(storeId) {
       alert('Store disconnected successfully');
       loadConnectedStores();
       loadDashboardData();
+      
+      // If we disconnected the selected store, go back to home
+      if (selectedStore && selectedStore.id === storeId) {
+        selectedStore = null;
+        document.getElementById('store-menu-section').style.display = 'none';
+        navigateTo('home');
+      }
     } else {
       const error = await res.json();
       alert('Failed to disconnect store: ' + (error.error || 'Unknown error'));
@@ -365,20 +615,210 @@ async function disconnectStore(storeId) {
   }
 }
 
-// Action functions
-async function manualSync() {
-  try {
-    const res = await apiCall('/sync', { method: 'POST' });
+// Store-specific functions
+function loadStoreSpecificData(pageName) {
+  if (!selectedStore) return;
 
+  const subtitle = document.getElementById(`${pageName}-subtitle`);
+  if (subtitle) {
+    subtitle.textContent = `${selectedStore.platform} - ${selectedStore.storeUrl}`;
+  }
+
+  if (pageName === 'store-products') {
+    loadStoreProducts();
+  } else if (pageName === 'store-orders') {
+    loadStoreOrders();
+  } else if (pageName === 'store-analytics') {
+    loadStoreAnalytics();
+  }
+}
+
+async function loadStoreProducts() {
+  const content = document.getElementById('products-content');
+  content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading products...</p>';
+
+  try {
+    // Fetch products directly from the store
+    const res = await apiCall(`/stores/${selectedStore.id}/products`);
     if (res.ok) {
-      alert('Sync started successfully!');
-      loadDashboardData();
+      const products = await res.json();
+      displayProducts(products);
     } else {
-      const error = await res.json();
-      alert('Failed to start sync: ' + (error.error || 'Unknown error'));
+      content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">Failed to load products</p>';
     }
   } catch (error) {
-    alert('Network error. Please try again.');
+    content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">Error loading products</p>';
+  }
+}
+
+function displayProducts(products) {
+  const content = document.getElementById('products-content');
+  
+  if (products.length === 0) {
+    content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">No products found</p>';
+    return;
+  }
+
+  content.innerHTML = `
+    <div class="table-responsive">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Product Name</th>
+            <th>SKU</th>
+            <th>Price</th>
+            <th>Stock</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${products.map(product => `
+            <tr>
+              <td>${product.name || 'N/A'}</td>
+              <td>${product.sku || 'N/A'}</td>
+              <td>$${product.price || '0.00'}</td>
+              <td>${product.stock || '0'}</td>
+              <td><span class="status-badge ${product.synced ? 'status-success' : 'status-warning'}">${product.synced ? 'Synced' : 'Pending'}</span></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function loadStoreOrders() {
+  const content = document.getElementById('orders-content');
+  content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading orders...</p>';
+
+  try {
+    // Fetch orders directly from the store
+    const res = await apiCall(`/stores/${selectedStore.id}/orders`);
+    if (res.ok) {
+      const orders = await res.json();
+      displayOrders(orders);
+    } else {
+      content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">Failed to load orders</p>';
+    }
+  } catch (error) {
+    content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">Error loading orders</p>';
+  }
+}
+
+function displayOrders(orders) {
+  const content = document.getElementById('orders-content');
+  
+  if (orders.length === 0) {
+    content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">No orders found</p>';
+    return;
+  }
+
+  content.innerHTML = `
+    <div class="table-responsive">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Order ID</th>
+            <th>Customer</th>
+            <th>Date</th>
+            <th>Total</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${orders.map(order => `
+            <tr>
+              <td>${order.orderId || 'N/A'}</td>
+              <td>${order.customer || 'N/A'}</td>
+              <td>${order.date ? new Date(order.date).toLocaleDateString() : 'N/A'}</td>
+              <td>$${order.total || '0.00'}</td>
+              <td><span class="status-badge status-success">${order.status || 'Completed'}</span></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function loadStoreAnalytics() {
+  try {
+    // Get analytics from the store endpoint
+    const res = await apiCall(`/stores/${selectedStore.id}/analytics`);
+    if (res.ok) {
+      const analytics = await res.json();
+      document.getElementById('store-synced-products').textContent = analytics.syncedProducts || 0;
+      document.getElementById('store-orders-processed').textContent = analytics.ordersProcessed || 0;
+    }
+  } catch (error) {
+    console.error('Failed to load analytics:', error);
+  }
+}
+
+async function syncStoreProducts() {
+  console.log('syncStoreProducts called, selectedStore:', selectedStore);
+  if (!selectedStore) {
+    showNotification('error', 'Please select a store first');
+    return;
+  }
+
+  const confirmed = confirm('Do you want to push products from Prokip to this store?\n\nThis will sync all Prokip products to your connected store.');
+  if (!confirmed) return;
+
+  try {
+    showNotification('info', 'Starting product sync...');
+    const res = await apiCall('/setup/products', {
+      method: 'POST',
+      body: JSON.stringify({
+        method: 'push',
+        connectionId: selectedStore.id
+      })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      showNotification('success', data.message || 'Product sync completed successfully');
+      setTimeout(() => loadStoreProducts(), 2000);
+    } else {
+      const error = await res.json();
+      showNotification('error', error.error || 'Failed to sync products');
+    }
+  } catch (error) {
+    console.error('Sync error:', error);
+    showNotification('error', 'Error starting product sync');
+  }
+}
+
+async function syncStoreOrders() {
+  console.log('syncStoreOrders called, selectedStore:', selectedStore);
+  if (!selectedStore) {
+    showNotification('error', 'Please select a store first');
+    return;
+  }
+
+  if (selectedStore.platform === 'shopify') {
+    showNotification('info', 'Shopify orders are synced automatically via webhooks');
+    return;
+  }
+
+  const confirmed = confirm('Pull orders from your WooCommerce store?\n\nThis will fetch recent orders and sync them to Prokip.');
+  if (!confirmed) return;
+
+  try {
+    showNotification('info', 'Pulling orders from store...');
+    const res = await apiCall('/sync/pull-orders', { method: 'POST' });
+    
+    if (res.ok) {
+      const data = await res.json();
+      showNotification('success', data.message || 'Orders synced successfully');
+      setTimeout(() => loadStoreOrders(), 2000);
+    } else {
+      const error = await res.json();
+      showNotification('error', error.error || 'Failed to sync orders');
+    }
+  } catch (error) {
+    console.error('Order sync error:', error);
+    showNotification('error', 'Error syncing orders');
   }
 }
 
@@ -387,7 +827,7 @@ document.addEventListener('click', function(event) {
   const profileMenu = document.querySelector('.profile-menu');
   const dropdown = document.getElementById('profile-dropdown');
 
-  if (!profileMenu.contains(event.target)) {
+  if (profileMenu && !profileMenu.contains(event.target)) {
     dropdown.style.display = 'none';
   }
 });

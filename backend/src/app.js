@@ -11,6 +11,7 @@ const connectionRoutes = require('./routes/connectionRoutes');
 const setupRoutes = require('./routes/setupRoutes');
 const syncRoutes = require('./routes/syncRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
+const storeRoutes = require('./routes/storeRoutes');
 const authMiddleware = require('./middlewares/authMiddleware');
 const { pollProkipToStores } = require('./services/syncService');
 
@@ -42,10 +43,19 @@ app.use(express.static(path.join(__dirname, '../../frontend/public')));
 app.use('/auth', authRoutes);
 app.use('/webhook', webhookRoutes);
 
-// Protected routes
-app.use('/connections', authMiddleware, connectionRoutes);
+// Protected routes (with exceptions for callbacks)
+// Callback routes are public - must come before the protected middleware
+const skipAuthForCallbacks = (req, res, next) => {
+  if (req.path.startsWith('/callback/')) {
+    return next();
+  }
+  return authMiddleware(req, res, next);
+};
+
+app.use('/connections', skipAuthForCallbacks, connectionRoutes);
 app.use('/setup', authMiddleware, setupRoutes);
 app.use('/sync', authMiddleware, syncRoutes);
+app.use('/stores', authMiddleware, storeRoutes);
 
 // Root route - serve dashboard
 app.get('/', (req, res) => {

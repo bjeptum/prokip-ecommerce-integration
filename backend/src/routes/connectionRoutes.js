@@ -36,10 +36,10 @@ router.get('/shopify', [
 
   const { store } = req.query;
   const state = crypto.randomBytes(16).toString('hex');
-  const scopes = 'read_products,write_products,read_inventory,write_inventory,read_orders,write_orders';
-  const redirectUri = process.env.REDIRECT_URI || `http://localhost:${process.env.PORT}/connections/callback/shopify`;
+  const scopes = process.env.SHOPIFY_SCOPES || 'read_products,write_products,read_inventory,write_inventory,read_orders,write_orders';
+  const redirectUri = process.env.REDIRECT_URI;
 
-  const authorizeUrl = `https://${store}/admin/oauth/authorize?client_id=${process.env.SHOPIFY_CLIENT_ID}&scope=${scopes}&redirect_uri=${redirectUri}&state=${state}`;
+  const authorizeUrl = `https://${store}/admin/oauth/authorize?client_id=${process.env.SHOPIFY_CLIENT_ID}&scope=${scopes}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
   res.redirect(authorizeUrl);
 });
 
@@ -57,10 +57,10 @@ router.post('/shopify/initiate', [
     const normalizedUrl = normalizeShopifyUrl(storeUrl);
     
     const state = crypto.randomBytes(16).toString('hex');
-    const scopes = 'read_products,write_products,read_inventory,write_inventory,read_orders,write_orders';
-    const redirectUri = process.env.REDIRECT_URI || `http://localhost:${process.env.PORT}/connections/callback/shopify`;
+    const scopes = process.env.SHOPIFY_SCOPES || 'read_products,write_products,read_inventory,write_inventory,read_orders,write_orders';
+    const redirectUri = process.env.REDIRECT_URI;
 
-    const authorizeUrl = `https://${normalizedUrl}/admin/oauth/authorize?client_id=${process.env.SHOPIFY_CLIENT_ID}&scope=${scopes}&redirect_uri=${redirectUri}&state=${state}`;
+    const authorizeUrl = `https://${normalizedUrl}/admin/oauth/authorize?client_id=${process.env.SHOPIFY_CLIENT_ID}&scope=${scopes}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
 
     res.json({ authUrl: authorizeUrl });
   } catch (error) {
@@ -123,16 +123,18 @@ router.get('/callback/shopify', async (req, res) => {
     }
 
     // Register webhooks
+    let webhookStatus = 'failed';
     try {
       await registerShopifyWebhooks(shop, accessToken);
       console.log(`Registered webhooks for ${shop}`);
+      webhookStatus = 'success';
     } catch (webhookError) {
       console.error('Webhook registration failed:', webhookError.message);
       // Don't fail the connection if webhooks fail
     }
 
-    // Redirect to frontend with success message
-    res.redirect(`/?shopify_success=true&store=${encodeURIComponent(shop)}`);
+    // Redirect to frontend with success message and webhook status
+    res.redirect(`/?shopify_success=true&store=${encodeURIComponent(shop)}&webhooks=${webhookStatus}`);
   } catch (error) {
     console.error('Shopify connection error:', error.response?.data || error.message);
     const errorMsg = error.response?.data?.error_description || error.message || 'Failed to connect Shopify store';
