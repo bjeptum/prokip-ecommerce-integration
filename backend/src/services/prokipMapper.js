@@ -31,16 +31,30 @@ async function mapOrderToProkipSell(data, locationId, platform) {
     const productId = await getProkipProductIdBySku(item.sku);
     if (!productId) continue;
 
+    // Calculate unit price with tax
+    const unitPrice = parseFloat(item.price);
+    const taxPerUnit = platform === 'shopify' 
+      ? (parseFloat(item.total_tax || 0) / item.quantity)
+      : (parseFloat(item.total_tax || 0) / item.quantity);
+    
     products.push({
       product_id: productId,
       variation_id: productId, // simplify
       quantity: item.quantity,
-      unit_price: parseFloat(item.price),
-      unit_price_inc_tax: parseFloat(item.price) + (parseFloat(item.total_tax || 0) / item.quantity)
+      unit_price: unitPrice,
+      unit_price_inc_tax: unitPrice + taxPerUnit
     });
   }
 
   if (products.length === 0) return null;
+
+  // Extract discount amount
+  let discountAmount = 0;
+  if (platform === 'shopify') {
+    discountAmount = parseFloat(data.total_discounts || 0);
+  } else if (platform === 'woocommerce') {
+    discountAmount = parseFloat(data.discount_total || 0);
+  }
 
   return {
     sells: [{
@@ -52,6 +66,8 @@ async function mapOrderToProkipSell(data, locationId, platform) {
       type: 'sell',
       payment_status: 'paid',
       final_total: parseFloat(data.total || data.total_price),
+      discount_amount: discountAmount,
+      discount_type: 'fixed',
       products,
       payments: [{
         method: 'cash',
@@ -62,13 +78,88 @@ async function mapOrderToProkipSell(data, locationId, platform) {
   };
 }
 
+/**
+ * Map refund data to Prokip products (partial refunds only)
+ */
 function mapRefundToProkipProducts(data, platform) {
-  // Simplified - implement based on actual refund data
-  return [];
+  const refundedProducts = [];
+
+  if (platform === 'shopify') {
+    // Shopify can have refunds in two structures:
+    // 1. Direct refund webhook with refund_line_items
+    // 2. orders/updated webhook with refunds array
+    
+    if (data.refund_line_items && Array.isArray(data.refund_line_items)) {
+      // Direct refund webhook structure
+      for (const refundItem of data.refund_line_items) {
+        const lineItem = refundItem.line_item;
+        if (lineItem && lineItem.sku) {
+          refundedProducts.push({
+            sku: lineItem.sku,
+            quantity: refundItem.quantity,
+            unit_price: parseFloat(lineItem.price || 0)
+          });
+        }
+      }
+    } else if (data.refunds && Array.isArray(data.refunds)) {
+      // orders/updated webhook with refunds array
+      for (const refund of data.refunds) {
+        if (refund.refund_line_items && Array.isArray(refund.refund_line_items)) {
+          for (const refundItem of refund.refund_line_items) {
+            const lineItem = refundItem.line_item;
+            if (lineItem && lineItem.sku) {
+              refundedProducts.push({
+                sku: lineItem.sku,
+                quantity: refundItem.quantity,
+                unit_price: parseFloat(lineItem.price || 0)
+              });
+            }
+          }
+        }
+      }
+    }
+  } else if (platform === 'woocommerce') {
+    // WooCommerce refund structure
+    if (data.line_items && Array.isArray(data.line_items)) {
+      for (const item of data.line_items) {
+        if (item.sku && item.quantity < 0) {
+          // Negative quantity indicates refund
+          refundedProducts.push({
+            sku: item.sku,
+            quantity: Math.abs(item.quantity),
+            unit_price: parseFloat(item.price || 0)
+          });
+        }
+      }
+    }
+  }
+
+  return refundedProducts;
+}
+
+/**
+ * Map cancellation to full order products (all items)
+ */
+function mapCancellationProducts(data, platform) {
+  const products = [];
+  const lineItems = platform === 'shopify' ? data.line_items : data.line_items;
+
+  for (const item of lineItems || []) {
+    if (item.sku) {
+      products.push({
+        sku: item.sku,
+        quantity: item.quantity,
+        unit_price: parseFloat(item.price || 0)
+      });
+    }
+  }
+
+  return products;
 }
 
 module.exports = {
   mapOrderToProkipSell,
   mapRefundToProkipProducts,
+  mapCancellationProducts,
   getProkipProductIdBySku
 };

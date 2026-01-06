@@ -46,8 +46,18 @@ async function updateInventoryInStore(connection, sku, quantity) {
       if (!product) throw new Error('Product not found');
 
       const variant = product.variants[0]; // Assume first variant
+      
+      // Get location - use configured location or default to first
       const locations = await getShopifyLocations(connection.storeUrl, connection.accessToken);
-      const locationId = locations[0].id; // Use first location
+      let locationId;
+      
+      if (connection.defaultLocationId) {
+        // Use configured location
+        locationId = connection.defaultLocationId;
+      } else {
+        // Default to first location
+        locationId = locations[0].id;
+      }
 
       await updateShopifyInventory(connection.storeUrl, connection.accessToken, variant.inventory_item_id, locationId, quantity);
     } catch (error) {

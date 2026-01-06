@@ -9,9 +9,19 @@ const getShopifyBaseUrl = (shop) => {
 };
 
 async function registerShopifyWebhooks(shop, accessToken) {
-  const webhookUrl = process.env.WEBHOOK_URL || `http://localhost:${process.env.PORT}/connections/webhook/shopify`;
-  // Only register product webhooks - order webhooks require protected customer data access
-  const topics = ['products/update', 'products/create', 'inventory_levels/update'];
+  const webhookUrl = process.env.WEBHOOK_URL || `http://localhost:${process.env.PORT}/webhook/shopify`;
+  
+  // Register both product and order webhooks
+  // Note: refunds/create requires protected customer data access - use orders/updated instead
+  const topics = [
+    'products/update', 
+    'products/create', 
+    'inventory_levels/update',
+    'orders/create',      // Order created event
+    'orders/paid',        // Order payment confirmed
+    'orders/cancelled',   // Order cancelled
+    'orders/updated'      // Order updated (includes refunds)
+  ];
 
   // First, clean up existing webhooks with the same address
   await cleanupExistingWebhooks(shop, accessToken, webhookUrl);

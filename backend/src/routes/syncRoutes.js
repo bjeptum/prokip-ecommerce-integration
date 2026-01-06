@@ -68,4 +68,49 @@ router.post('/pull-orders', async (req, res) => {
   res.json({ success: true, message: 'Orders pulled successfully' });
 });
 
+// Get sync errors for monitoring
+router.get('/errors', async (req, res) => {
+  try {
+    const { connectionId, resolved } = req.query;
+    
+    const where = {};
+    if (connectionId) where.connectionId = parseInt(connectionId);
+    if (resolved !== undefined) where.resolved = resolved === 'true';
+    
+    const errors = await prisma.syncError.findMany({
+      where,
+      include: {
+        connection: {
+          select: {
+            platform: true,
+            storeUrl: true
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100
+    });
+    
+    res.json(errors);
+  } catch (error) {
+    console.error('Failed to fetch sync errors:', error);
+    res.status(500).json({ error: 'Failed to fetch sync errors' });
+  }
+});
+
+// Mark sync error as resolved
+router.patch('/errors/:id/resolve', async (req, res) => {
+  try {
+    const errorId = parseInt(req.params.id);
+    await prisma.syncError.update({
+      where: { id: errorId },
+      data: { resolved: true }
+    });
+    res.json({ success: true, message: 'Error marked as resolved' });
+  } catch (error) {
+    console.error('Failed to resolve error:', error);
+    res.status(500).json({ error: 'Failed to resolve error' });
+  }
+});
+
 module.exports = router;

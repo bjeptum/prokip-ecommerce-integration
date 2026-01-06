@@ -86,6 +86,20 @@ router.get('/callback/shopify', async (req, res) => {
   }
 
   try {
+    // Check if connection already exists with a token (might be from a previous successful attempt)
+    const existingConnection = await prisma.connection.findFirst({
+      where: {
+        platform: 'shopify',
+        storeUrl: shop
+      }
+    });
+
+    // If connection exists with a valid token, this might be a duplicate callback
+    if (existingConnection && existingConnection.accessToken) {
+      console.log(`Connection already exists for ${shop}, skipping token exchange`);
+      return res.redirect(`/?shopify_success=true&store=${encodeURIComponent(shop)}&webhooks=existing`);
+    }
+
     // Exchange code for access token
     const tokenResponse = await axios.post(`https://${shop}/admin/oauth/access_token`, {
       client_id: process.env.SHOPIFY_CLIENT_ID,
@@ -94,14 +108,6 @@ router.get('/callback/shopify', async (req, res) => {
     });
 
     const accessToken = tokenResponse.data.access_token;
-
-    // Check if connection already exists
-    const existingConnection = await prisma.connection.findFirst({
-      where: {
-        platform: 'shopify',
-        storeUrl: shop
-      }
-    });
 
     if (existingConnection) {
       // Update existing connection
@@ -131,12 +137,26 @@ router.get('/callback/shopify', async (req, res) => {
     } catch (webhookError) {
       console.error('Webhook registration failed:', webhookError.message);
       // Don't fail the connection if webhooks fail
+      webhookStatus = 'partial';
     }
 
     // Redirect to frontend with success message and webhook status
     res.redirect(`/?shopify_success=true&store=${encodeURIComponent(shop)}&webhooks=${webhookStatus}`);
   } catch (error) {
     console.error('Shopify connection error:', error.response?.data || error.message);
+    
+    // If it's an invalid_request error (code already used), check if we have a connection
+    if (error.response?.data?.error === 'invalid_request') {
+      const existingConnection = await prisma.connection.findFirst({
+        where: { platform: 'shopify', storeUrl: shop }
+      });
+      
+      if (existingConnection && existingConnection.accessToken) {
+        console.log('Code already used but connection exists, treating as success');
+        return res.redirect(`/?shopify_success=true&store=${encodeURIComponent(shop)}&webhooks=existing`);
+      }
+    }
+    
     const errorMsg = error.response?.data?.error_description || error.message || 'Failed to connect Shopify store';
     res.redirect(`/?shopify_error=${encodeURIComponent(errorMsg)}`);
   }
@@ -292,6 +312,28 @@ router.delete('/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to disconnect' });
+  }
+});
+
+// Update connection settings (e.g., default location)
+router.patch('/:id/settings', [
+  body('defaultLocationId').optional()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+  const { id } = req.params;
+  const { defaultLocationId } = req.body;
+
+  try {
+    await prisma.connection.update({
+      where: { id: parseInt(id) },
+      data: { defaultLocationId }
+    });
+    res.json({ success: true, message: 'Connection settings updated' });
+  } catch (error) {
+    console.error('Failed to update connection settings:', error);
+    res.status(500).json({ error: 'Failed to update settings' });
   }
 });
 

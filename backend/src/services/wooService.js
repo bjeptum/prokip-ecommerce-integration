@@ -10,23 +10,33 @@ const getWooBaseUrl = (storeUrl) => {
 
 async function registerWooWebhooks(storeUrl, consumerKey, consumerSecret) {
   const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
-  const webhookUrl = process.env.WEBHOOK_URL || `http://localhost:${process.env.PORT}/connections/webhook/woocommerce`;
+  const webhookUrl = process.env.WEBHOOK_URL || `http://localhost:${process.env.PORT}/webhook/woocommerce`;
+  const secret = process.env.WEBHOOK_SECRET || 'prokip-secret';
 
-  try {
-    const baseUrl = getWooBaseUrl(storeUrl);
-    await axios.post(`${baseUrl}/wp-json/wc/v3/webhooks`, {
-      name: 'Prokip Order Sync',
-      topic: 'order.created',
-      delivery_url: webhookUrl,
-      secret: process.env.WEBHOOK_SECRET || 'prokip-secret'
-    }, {
-      headers: {
-        'Authorization': `Basic ${auth}`,
-        'Content-Type': 'application/json'
-      }
-    });
-  } catch (error) {
-    console.error('Failed to register WooCommerce webhook:', error.response?.data || error.message);
+  const topics = [
+    'order.created',
+    'order.updated',
+    'order.refunded'
+  ];
+
+  for (const topic of topics) {
+    try {
+      const baseUrl = getWooBaseUrl(storeUrl);
+      await axios.post(`${baseUrl}/wp-json/wc/v3/webhooks`, {
+        name: `Prokip ${topic}`,
+        topic,
+        delivery_url: webhookUrl,
+        secret
+      }, {
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      console.log(`✓ Registered WooCommerce ${topic} webhook successfully`);
+    } catch (error) {
+      console.error(`Failed to register WooCommerce ${topic} webhook:`, error.response?.data || error.message);
+    }
   }
 }
 

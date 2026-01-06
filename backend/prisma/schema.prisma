@@ -14,16 +14,18 @@ model User {
 }
 
 model Connection {
-  id             Int              @id @default(autoincrement())
-  platform       String
-  storeUrl       String
-  accessToken    String?
-  consumerKey    String?
-  consumerSecret String?
-  lastSync       DateTime?
-  syncEnabled    Boolean          @default(true)
-  InventoryCache InventoryCache[]
-  SalesLog       SalesLog[]
+  id                Int              @id @default(autoincrement())
+  platform          String
+  storeUrl          String
+  accessToken       String?
+  consumerKey       String?
+  consumerSecret    String?
+  lastSync          DateTime?
+  syncEnabled       Boolean          @default(true)
+  defaultLocationId String?
+  InventoryCache    InventoryCache[]
+  SalesLog          SalesLog[]
+  SyncError         SyncError[]
 
   @@unique([platform, storeUrl])
 }
@@ -50,4 +52,20 @@ model ProkipConfig {
   token      String
   apiUrl     String
   locationId String
+}
+
+model SyncError {
+  id           Int        @id @default(autoincrement())
+  connectionId Int
+  orderId      String?
+  errorType    String
+  errorMessage String
+  errorData    Json?
+  createdAt    DateTime   @default(now())
+  resolved     Boolean    @default(false)
+  connection   Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([connectionId])
+  @@index([resolved])
+  @@index([createdAt])
 }
