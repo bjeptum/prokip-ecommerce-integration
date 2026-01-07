@@ -1,33 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
-}
-
 model User {
-  id       Int    @id @default(autoincrement())
-  username String @unique
-  password String
+  id               Int          @id @default(autoincrement())
+  username         String?      @unique
+  password         String?
+  prokipApiUrl     String?
+  prokipLocationId String?
+  prokipToken      String?
+  prokipUsername   String?
+  Connection       Connection[]
+
+  @@index([prokipToken])
+  @@index([prokipUsername])
 }
 
 model Connection {
-  id                Int              @id @default(autoincrement())
-  platform          String
-  storeUrl          String
-  accessToken       String?
-  consumerKey       String?
-  consumerSecret    String?
-  lastSync          DateTime?
-  syncEnabled       Boolean          @default(true)
-  defaultLocationId String?
-  InventoryCache    InventoryCache[]
-  SalesLog          SalesLog[]
-  SyncError         SyncError[]
+  id             Int              @id @default(autoincrement())
+  platform       String
+  storeUrl       String
+  accessToken    String?
+  consumerKey    String?
+  consumerSecret String?
+  lastSync       DateTime?
+  syncEnabled    Boolean          @default(true)
+  userId         Int?
+  User           User?            @relation(fields: [userId], references: [id])
+  InventoryCache InventoryCache[]
+  SalesLog       SalesLog[]
 
   @@unique([platform, storeUrl])
+  @@unique([userId, platform, storeUrl])
+  @@index([userId])
 }
 
 model InventoryCache {
@@ -52,20 +62,4 @@ model ProkipConfig {
   token      String
   apiUrl     String
   locationId String
-}
-
-model SyncError {
-  id           Int        @id @default(autoincrement())
-  connectionId Int
-  orderId      String?
-  errorType    String
-  errorMessage String
-  errorData    Json?
-  createdAt    DateTime   @default(now())
-  resolved     Boolean    @default(false)
-  connection   Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-
-  @@index([connectionId])
-  @@index([resolved])
-  @@index([createdAt])
 }

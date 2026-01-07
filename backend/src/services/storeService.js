@@ -1,5 +1,6 @@
 const axios = require('axios');
 const OAuth = require('oauth').OAuth;
+require('dotenv').config();
 const { updateShopifyInventory, getShopifyLocations, getShopifyBaseUrl } = require('./shopifyService');
 const { getWooBaseUrl } = require('./wooService');
 
@@ -16,12 +17,19 @@ async function createProductInStore(connection, product) {
     });
   } else if (connection.platform === 'woocommerce') {
     const baseUrl = getWooBaseUrl(connection.storeUrl);
-    const oa = new OAuth(null, null, connection.consumerKey, connection.consumerSecret, '1.0A', null, 'HMAC-SHA1');
+    const consumerKey = process.env.WOO_CONSUMER_KEY;
+    const consumerSecret = process.env.WOO_CONSUMER_SECRET;
+
+    if (!consumerKey || !consumerSecret) {
+      throw new Error('WooCommerce credentials are not configured on the server.');
+    }
+
+    const oa = new OAuth(null, null, consumerKey, consumerSecret, '1.0A', null, 'HMAC-SHA1');
     return new Promise((resolve, reject) => {
       oa.post(
         `${baseUrl}/wp-json/wc/v3/products`,
-        connection.consumerKey,
-        connection.consumerSecret,
+        consumerKey,
+        consumerSecret,
         JSON.stringify({
           name: product.name,
           sku: product.sku,
@@ -67,12 +75,19 @@ async function updateInventoryInStore(connection, sku, quantity) {
     try {
       // Find product by SKU
       const baseUrl = getWooBaseUrl(connection.storeUrl);
-      const oa = new OAuth(null, null, connection.consumerKey, connection.consumerSecret, '1.0A', null, 'HMAC-SHA1');
+      const consumerKey = process.env.WOO_CONSUMER_KEY;
+      const consumerSecret = process.env.WOO_CONSUMER_SECRET;
+
+      if (!consumerKey || !consumerSecret) {
+        throw new Error('WooCommerce credentials are not configured on the server.');
+      }
+
+      const oa = new OAuth(null, null, consumerKey, consumerSecret, '1.0A', null, 'HMAC-SHA1');
       return new Promise((resolve, reject) => {
         oa.get(
           `${baseUrl}/wp-json/wc/v3/products?sku=${sku}`,
-          connection.consumerKey,
-          connection.consumerSecret,
+          consumerKey,
+          consumerSecret,
           (error, data) => {
             if (error) return reject(error);
             const products = JSON.parse(data);
@@ -81,8 +96,8 @@ async function updateInventoryInStore(connection, sku, quantity) {
             const productId = products[0].id;
             oa.put(
               `${baseUrl}/wp-json/wc/v3/products/${productId}`,
-              connection.consumerKey,
-              connection.consumerSecret,
+              consumerKey,
+              consumerSecret,
               JSON.stringify({ stock_quantity: quantity }),
               'application/json',
               (error) => error ? reject(error) : resolve()
@@ -96,4 +111,27 @@ async function updateInventoryInStore(connection, sku, quantity) {
   }
 }
 
-module.exports = { createProductInStore, updateInventoryInStore };
+async function verifyWooCommerceConnection(storeUrl) {
+  const baseUrl = getWooBaseUrl(storeUrl);
+  const consumerKey = process.env.WOO_CONSUMER_KEY;
+  const consumerSecret = process.env.WOO_CONSUMER_SECRET;
+
+  if (!consumerKey || !consumerSecret) {
+    throw new Error('WooCommerce credentials are not configured on the server.');
+  }
+
+  const oa = new OAuth(null, null, consumerKey, consumerSecret, '1.0A', null, 'HMAC-SHA1');
+  return new Promise((resolve, reject) => {
+    oa.get(
+      `${baseUrl}/wp-json/wc/v3/products?per_page=1`,
+      consumerKey,
+      consumerSecret,
+      (error, data) => {
+        if (error) return reject(new Error('Failed to connect to WooCommerce. Check Store URL and server credentials.'));
+        resolve(true);
+      }
+    );
+  });
+}
+
+module.exports = { createProductInStore, updateInventoryInStore, verifyWooCommerceConnection };

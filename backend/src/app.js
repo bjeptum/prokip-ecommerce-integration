@@ -1,4 +1,14 @@
 require('dotenv').config();
+
+// Verify critical environment variables at startup
+const requiredEnv = ['WOOCOMMERCE_STORE_URL', 'WOOCOMMERCE_CONSUMER_KEY', 'WOOCOMMERCE_CONSUMER_SECRET'];
+const missingEnv = requiredEnv.filter(key => !process.env[key]);
+if (missingEnv.length > 0) {
+  console.error("❌ CRITICAL ERROR: The following variables are missing in .env:", missingEnv.join(", "));
+} else {
+  console.log("✅ WooCommerce credentials loaded successfully.");
+}
+
 const express = require('express');
 const path = require('path');
 const bodyParser = require('body-parser');

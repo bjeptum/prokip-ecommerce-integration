@@ -355,30 +355,14 @@
 
           <div class="modal-body">
             <div class="connection-instructions">
-              <h3>How to Connect Your WooCommerce Store</h3>
-              <ol>
-                <li>Go to your WordPress admin panel</li>
-                <li>Navigate to WooCommerce → Settings → Advanced → REST API</li>
-                <li>Click "Add Key" to create new API credentials</li>
-                <li>Set permissions to "Read/Write"</li>
-                <li>Copy the Consumer Key and Consumer Secret below</li>
-              </ol>
+              <h3>Connect Your WooCommerce Store</h3>
+              <p>Enter your store URL below to connect. Credentials are configured on the server.</p>
             </div>
 
             <div class="form-group">
               <label for="woo-store-url">Store URL</label>
               <input type="text" id="woo-store-url" placeholder="https://mystore.com" />
               <small class="form-help">Full URL including https://</small>
-            </div>
-
-            <div class="form-group">
-              <label for="woo-consumer-key">Consumer Key</label>
-              <input type="text" id="woo-consumer-key" placeholder="ck_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-            </div>
-
-            <div class="form-group">
-              <label for="woo-consumer-secret">Consumer Secret</label>
-              <input type="password" id="woo-consumer-secret" placeholder="cs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
             </div>
 
             <button onclick="connectWooCommerceStore()" class="btn-primary">

@@ -1,11 +1,14 @@
+const bodyParser = require('body-parser');
+
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const { body, query, validationResult } = require('express-validator');
-const bodyParser = require('body-parser');
-const { registerShopifyWebhooks, getShopifyProducts, getShopifyOrders } = require('../services/shopifyService');
-const { registerWooWebhooks, getWooProducts, getWooOrders } = require('../services/wooService');
+const authMiddleware = require('../middlewares/authMiddleware');
+
+const { registerShopifyWebhooks } = require('../services/shopifyService');
+const { registerWooWebhooks } = require('../services/wooService');
 const { processStoreToProkip } = require('../services/syncService');
 
 const router = express.Router();
@@ -30,14 +33,42 @@ function normalizeShopifyUrl(storeUrl) {
 // Shopify OAuth start (legacy)
 router.get('/shopify', [
   query('store').notEmpty()
-], async (req, res) => {
+], authMiddleware, async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
+  const userId = req.userId;
   const { store } = req.query;
-  const state = crypto.randomBytes(16).toString('hex');
-  const scopes = process.env.SHOPIFY_SCOPES || 'read_products,write_products,read_inventory,write_inventory,read_orders,write_orders';
-  const redirectUri = process.env.REDIRECT_URI;
+
+  // Check if user has Prokip credentials
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user || !user.prokipToken) {
+    return res.status(400).json({
+      error: 'Prokip authentication required',
+      message: 'Please log in with your Prokip credentials first'
+    });
+  }
+
+  // Check if user already has a connection (only one platform allowed)
+  const existingConnection = await prisma.connection.findFirst({
+    where: { userId }
+  });
+
+  if (existingConnection && existingConnection.platform !== 'shopify') {
+    return res.status(400).json({
+      error: 'Platform already connected',
+      message: `You already have a ${existingConnection.platform} connection. Please disconnect it first to connect Shopify.`
+    });
+  }
+
+  // Include userId in state for callback
+  const state = Buffer.from(JSON.stringify({ userId, timestamp: Date.now() })).toString('base64');
+  const scopes =
+    'read_products,write_products,read_inventory,write_inventory,read_orders,write_orders';
+
+  const redirectUri =
+    process.env.REDIRECT_URI ||
+    `http://localhost:${process.env.PORT}/connections/callback/shopify`;
 
   const authorizeUrl = `https://${store}/admin/oauth/authorize?client_id=${process.env.SHOPIFY_CLIENT_ID}&scope=${scopes}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
   res.redirect(authorizeUrl);
@@ -86,20 +117,6 @@ router.get('/callback/shopify', async (req, res) => {
   }
 
   try {
-    // Check if connection already exists with a token (might be from a previous successful attempt)
-    const existingConnection = await prisma.connection.findFirst({
-      where: {
-        platform: 'shopify',
-        storeUrl: shop
-      }
-    });
-
-    // If connection exists with a valid token, this might be a duplicate callback
-    if (existingConnection && existingConnection.accessToken) {
-      console.log(`Connection already exists for ${shop}, skipping token exchange`);
-      return res.redirect(`/?shopify_success=true&store=${encodeURIComponent(shop)}&webhooks=existing`);
-    }
-
     // Exchange code for access token
     const tokenResponse = await axios.post(`https://${shop}/admin/oauth/access_token`, {
       client_id: process.env.SHOPIFY_CLIENT_ID,
@@ -108,55 +125,78 @@ router.get('/callback/shopify', async (req, res) => {
     });
 
     const accessToken = tokenResponse.data.access_token;
-
-    if (existingConnection) {
-      // Update existing connection
-      await prisma.connection.update({
-        where: { id: existingConnection.id },
-        data: { accessToken, lastSync: new Date() }
-      });
-      console.log(`Updated Shopify connection for ${shop}`);
-    } else {
-      // Create new connection
-      await prisma.connection.create({
-        data: {
-          platform: 'shopify',
-          storeUrl: shop,
-          accessToken
-        }
-      });
-      console.log(`Created new Shopify connection for ${shop}`);
-    }
-
-    // Register webhooks
-    let webhookStatus = 'failed';
-    try {
-      await registerShopifyWebhooks(shop, accessToken);
-      console.log(`Registered webhooks for ${shop}`);
-      webhookStatus = 'success';
-    } catch (webhookError) {
-      console.error('Webhook registration failed:', webhookError.message);
-      // Don't fail the connection if webhooks fail
-      webhookStatus = 'partial';
-    }
-
-    // Redirect to frontend with success message and webhook status
-    res.redirect(`/?shopify_success=true&store=${encodeURIComponent(shop)}&webhooks=${webhookStatus}`);
-  } catch (error) {
-    console.error('Shopify connection error:', error.response?.data || error.message);
     
-    // If it's an invalid_request error (code already used), check if we have a connection
-    if (error.response?.data?.error === 'invalid_request') {
-      const existingConnection = await prisma.connection.findFirst({
-        where: { platform: 'shopify', storeUrl: shop }
-      });
-      
-      if (existingConnection && existingConnection.accessToken) {
-        console.log('Code already used but connection exists, treating as success');
-        return res.redirect(`/?shopify_success=true&store=${encodeURIComponent(shop)}&webhooks=existing`);
+    // Extract userId from state if provided
+    let userId = null;
+    if (req.query.state) {
+      try {
+        const stateData = JSON.parse(Buffer.from(req.query.state, 'base64').toString());
+        userId = stateData.userId;
+      } catch (e) {
+        console.warn('Could not parse state parameter:', e);
       }
     }
-    
+
+    // If userId is available, use it; otherwise create connection without userId
+    if (userId) {
+      // Check if user already has a different platform connection
+      const existingConnection = await prisma.connection.findFirst({
+        where: { userId }
+      });
+
+      if (existingConnection && existingConnection.platform !== 'shopify') {
+        return res.redirect(`/?error=${encodeURIComponent('You already have a ' + existingConnection.platform + ' connection. Please disconnect it first.')}`);
+      }
+
+      const connection = await prisma.connection.upsert({
+        where: {
+          userId_platform_storeUrl: {
+            userId,
+            platform: 'shopify',
+            storeUrl: shop
+          }
+        },
+        update: {
+          accessToken,
+          lastSync: new Date(),
+          syncEnabled: true
+        },
+        create: {
+          userId,
+          platform: 'shopify',
+          storeUrl: shop,
+          accessToken,
+          syncEnabled: true
+        }
+      });
+    } else {
+      // Legacy: create connection without userId (for backward compatibility)
+      const connection = await prisma.connection.upsert({
+        where: {
+          platform_storeUrl: {
+            platform: 'shopify',
+            storeUrl: shop
+          }
+        },
+        update: {
+          accessToken,
+          lastSync: new Date(),
+          syncEnabled: true
+        },
+        create: {
+          platform: 'shopify',
+          storeUrl: shop,
+          accessToken,
+          syncEnabled: true
+        }
+      });
+    }
+
+    await registerShopifyWebhooks(shop, accessToken);
+
+    res.redirect('/?success=Shopify+connected');
+  } catch (error) {
+    console.error('Shopify connection error:', error.response?.data || error.message);
     const errorMsg = error.response?.data?.error_description || error.message || 'Failed to connect Shopify store';
     res.redirect(`/?shopify_error=${encodeURIComponent(errorMsg)}`);
   }
@@ -183,42 +223,78 @@ router.post('/webhook/shopify', bodyParser.raw({ type: 'application/json' }), (r
 // WooCommerce connection
 router.post('/woocommerce', [
   body('storeUrl').isURL(),
-  body('consumerKey').notEmpty(),
-  body('consumerSecret').notEmpty(),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-  const { storeUrl, consumerKey, consumerSecret } = req.body;
+  const { storeUrl } = req.body;
+  const consumerKey = process.env.WOOCOMMERCE_CONSUMER_KEY;
+  const consumerSecret = process.env.WOOCOMMERCE_CONSUMER_SECRET;
+
+  if (!consumerKey || !consumerSecret) {
+    return res.status(500).json({ error: 'WooCommerce credentials are not configured in .env' });
+  }
+
+  const userId = req.userId;
 
   try {
-    // Check if connection already exists
-    const existingConnection = await prisma.connection.findFirst({
-      where: {
-        platform: 'woocommerce',
-        storeUrl
-      }
-    });
-
-    if (existingConnection) {
-      // Update existing connection
-      await prisma.connection.update({
-        where: { id: existingConnection.id },
-        data: { consumerKey, consumerSecret }
-      });
-    } else {
-      // Create new connection
-      await prisma.connection.create({
-        data: {
-          platform: 'woocommerce',
-          storeUrl,
-          consumerKey,
-          consumerSecret
-        }
+    // Check if user has Prokip credentials
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.prokipToken) {
+      return res.status(400).json({
+        error: 'Prokip authentication required',
+        message: 'Please log in with your Prokip credentials first'
       });
     }
 
-    await registerWooWebhooks(storeUrl, consumerKey, consumerSecret);
+    // Check if user already has a connection (only one platform allowed)
+    const existingConnection = await prisma.connection.findFirst({
+      where: { userId }
+    });
+
+    if (existingConnection && existingConnection.platform !== 'woocommerce') {
+      return res.status(400).json({
+        error: 'Platform already connected',
+        message: `You already have a ${existingConnection.platform} connection. Please disconnect it first to connect WooCommerce.`
+      });
+    }
+
+    // Normalize store URL before saving
+    const normalizedStoreUrl = storeUrl.trim().replace(/\/+$/, '');
+    if (!normalizedStoreUrl.match(/^https?:\/\//)) {
+      return res.status(400).json({
+        error: 'Invalid store URL',
+        message: 'Store URL must include http:// or https://'
+      });
+    }
+
+    // Validate Woo credentials
+    await registerWooWebhooks(normalizedStoreUrl, consumerKey, consumerSecret);
+
+    await prisma.connection.upsert({
+      where: {
+        userId_platform_storeUrl: {
+          userId,
+          platform: 'woocommerce',
+          storeUrl: normalizedStoreUrl
+        }
+      },
+      update: {
+        consumerKey,
+        consumerSecret,
+        lastSync: new Date(),
+        syncEnabled: true
+      },
+      create: {
+        userId,
+        platform: 'woocommerce',
+        storeUrl: normalizedStoreUrl,
+        consumerKey,
+        consumerSecret,
+        syncEnabled: true
+      }
+    });
+
     res.json({ success: true });
   } catch (error) {
     console.error('WooCommerce connection error:', error);
@@ -257,83 +333,76 @@ router.post('/prokip', [
 
 // Get connections status with enhanced data for dashboard
 router.get('/status', async (req, res) => {
-  try {
-    const connections = await prisma.connection.findMany();
+  const userId = req.userId;
+  
+  // Get user info to check Prokip auth
+  const user = await prisma.user.findUnique({ 
+    where: { id: userId },
+    select: { 
+      id: true, 
+      prokipToken: true, 
+      prokipLocationId: true,
+      username: true
+    }
+  });
 
-    // Enhance connections with real-time data from stores
-    const enhancedConnections = await Promise.all(connections.map(async (conn) => {
-      let productCount = 0;
-      let orderCount = 0;
+  const connections = await prisma.connection.findMany({
+    where: { userId },
+    select: {
+      id: true,
+      platform: true,
+      storeUrl: true,
+      lastSync: true,
+      syncEnabled: true
+    }
+  });
 
-      try {
-        if (conn.platform === 'shopify') {
-          const [products, orders] = await Promise.all([
-            getShopifyProducts(conn.storeUrl, conn.accessToken),
-            getShopifyOrders(conn.storeUrl, conn.accessToken)
-          ]);
-          productCount = products.length;
-          orderCount = orders.length;
-        } else if (conn.platform === 'woocommerce') {
-          const [products, orders] = await Promise.all([
-            getWooProducts(conn.storeUrl, conn.consumerKey, conn.consumerSecret),
-            getWooOrders(conn.storeUrl, conn.consumerKey, conn.consumerSecret)
-          ]);
-          productCount = products.length;
-          orderCount = orders.length;
-        }
-      } catch (error) {
-        console.error(`Failed to fetch data for ${conn.platform} store ${conn.storeUrl}:`, error.message);
-        // Keep counts at 0 if fetch fails
-      }
-
-      return {
-        id: conn.id,
-        platform: conn.platform,
-        storeUrl: conn.storeUrl,
-        lastSync: conn.lastSync,
-        syncEnabled: conn.syncEnabled,
-        productCount,
-        orderCount
-      };
-    }));
-
-    res.json(enhancedConnections);
-  } catch (error) {
-    console.error('Error fetching connection status:', error);
-    res.status(500).json({ error: 'Failed to fetch connection status' });
-  }
+  res.json({
+    user: {
+      id: user?.id,
+      hasProkipAuth: !!user?.prokipToken,
+      locationId: user?.prokipLocationId
+    },
+    connections,
+    canConnect: !!user?.prokipToken && connections.length === 0
+  });
 });
 
-// Disconnect store
-router.delete('/:id', async (req, res) => {
-  const { id } = req.params;
-  try {
-    await prisma.connection.delete({ where: { id: parseInt(id) } });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to disconnect' });
-  }
-});
-
-// Update connection settings (e.g., default location)
-router.patch('/:id/settings', [
-  body('defaultLocationId').optional()
+/* ======================================================
+   DISCONNECT STORE
+====================================================== */
+router.post('/disconnect', [
+  body('connectionId').isInt()
 ], async (req, res) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
 
-  const { id } = req.params;
-  const { defaultLocationId } = req.body;
+  const userId = req.userId;
+  const { connectionId } = req.body;
 
   try {
-    await prisma.connection.update({
-      where: { id: parseInt(id) },
-      data: { defaultLocationId }
+    // Verify the connection belongs to the user
+    const connection = await prisma.connection.findUnique({
+      where: { id: parseInt(connectionId, 10) }
     });
-    res.json({ success: true, message: 'Connection settings updated' });
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Connection not found' });
+    }
+
+    if (connection.userId !== userId) {
+      return res.status(403).json({ error: 'Unauthorized: This connection does not belong to you' });
+    }
+
+    await prisma.connection.delete({
+      where: { id: parseInt(connectionId, 10) }
+    });
+
+    res.json({ success: true, message: 'Connection disconnected successfully' });
   } catch (error) {
-    console.error('Failed to update connection settings:', error);
-    res.status(500).json({ error: 'Failed to update settings' });
+    res.status(500).json({ error: 'Failed to disconnect' });
   }
 });
 

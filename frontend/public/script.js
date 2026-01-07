@@ -4,6 +4,7 @@ let currentBusinessLocation = null;
 let businessLocations = [];
 let prokipToken = null;
 let selectedStore = null;
+const API_BASE_URL = 'http://localhost:3000';
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
@@ -99,7 +100,8 @@ function showNotification(type, message) {
 
 // API call helper
 async function apiCall(endpoint, options = {}) {
-  const response = await fetch(endpoint, {
+  const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
+  const response = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -147,7 +149,7 @@ async function login() {
   }
 
   try {
-    const res = await fetch('/auth/login', {
+    const res = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -392,34 +394,47 @@ async function initiateShopifyConnection() {
 
 async function connectWooCommerceStore() {
   const storeUrl = document.getElementById('woo-store-url').value.trim();
-  const consumerKey = document.getElementById('woo-consumer-key').value.trim();
-  const consumerSecret = document.getElementById('woo-consumer-secret').value.trim();
 
-  if (!storeUrl || !consumerKey || !consumerSecret) {
-    alert('Please fill in all WooCommerce connection details');
+  if (!storeUrl) {
+    alert('Please enter the WooCommerce Store URL');
     return;
   }
+
+  // Show loading state
+  const modal = document.getElementById('woocommerce-modal');
+  const originalContent = modal.querySelector('.modal-body').innerHTML;
+  modal.querySelector('.modal-body').innerHTML = `
+    <div style="text-align: center; padding: 40px;">
+      <div class="loading-spinner"></div>
+      <h3 style="margin-top: 20px; color: var(--gray-700);">Connecting to WooCommerce...</h3>
+      <p style="color: var(--gray-500);">Verifying store credentials...</p>
+    </div>
+  `;
 
   try {
     const res = await apiCall('/connections/woocommerce', {
       method: 'POST',
       body: JSON.stringify({
-        storeUrl,
-        consumerKey,
-        consumerSecret
+        storeUrl
       })
     });
 
     if (res.ok) {
       alert('WooCommerce store connected successfully!');
+      // Restore content
+      modal.querySelector('.modal-body').innerHTML = originalContent;
       closeModal();
       loadConnectedStores();
       loadDashboardData();
     } else {
       const error = await res.json();
+      // Restore content
+      modal.querySelector('.modal-body').innerHTML = originalContent;
       alert('Failed to connect WooCommerce store: ' + (error.error || 'Unknown error'));
     }
   } catch (error) {
+    // Restore content
+    modal.querySelector('.modal-body').innerHTML = originalContent;
     alert('Network error. Please try again.');
   }
 }
