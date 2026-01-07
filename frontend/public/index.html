@@ -297,7 +297,10 @@
             <div id="stores-list" class="stores-list">
               <!-- Connected stores will be populated here -->
             </div>
-            <div style="margin-top: 16px; text-align: center;">
+            <div style="margin-top: 16px; display: flex; gap: 12px; justify-content: center;">
+              <button onclick="showSyncErrors()" class="btn-secondary" style="font-size: 14px;">
+                <i class="fas fa-exclamation-triangle"></i> View Sync Errors
+              </button>
               <button onclick="navigateTo('home')" class="btn-secondary" style="font-size: 14px;">
                 <i class="fas fa-arrow-left"></i> Back to Dashboard
               </button>
@@ -433,10 +436,14 @@
                 <li>You'll be redirected to Shopify to approve the connection</li>
                 <li>Once approved, you'll be redirected back and the store will be connected</li>
               </ol>
+              <div class="reassurance-box">
+                <i class="fas fa-shield-alt"></i>
+                <p><strong>Secure Connection:</strong> Prokip will never see your password. You'll approve access directly on Shopify's secure site.</p>
+              </div>
             </div>
 
             <div class="form-group">
-              <label for="shopify-store-url">Store URL</label>
+              <label for="shopify-store-url">Store URL *</label>
               <input type="text" id="shopify-store-url" placeholder="mystore.myshopify.com" />
               <small class="form-help">Enter your Shopify store URL without https://</small>
             </div>
@@ -647,6 +654,133 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <!-- Product Source Selection Modal -->
+  <div id="product-source-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Choose Product Setup Method</h2>
+        <button class="modal-close" onclick="closeModal()">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <p class="modal-description">How would you like to set up products for syncing?</p>
+        
+        <div class="source-options">
+          <div class="source-option-card" onclick="selectProductSource('pull')">
+            <div class="source-icon pull-icon">
+              <i class="fas fa-download"></i>
+            </div>
+            <h3>Use products from my online store</h3>
+            <p>Import existing products from your store into Prokip. Best if you already have products listed online.</p>
+            <ul class="feature-list">
+              <li><i class="fas fa-check"></i> Imports all store products</li>
+              <li><i class="fas fa-check"></i> Matches by SKU</li>
+              <li><i class="fas fa-check"></i> Creates missing products in Prokip</li>
+            </ul>
+            <button class="btn-primary">
+              <i class="fas fa-arrow-down"></i> Pull from Store
+            </button>
+          </div>
+
+          <div class="source-option-card" onclick="selectProductSource('push')">
+            <div class="source-icon push-icon">
+              <i class="fas fa-upload"></i>
+            </div>
+            <h3>Use products from Prokip</h3>
+            <p>Publish your Prokip inventory to your online store. Best if you're already managing inventory in Prokip.</p>
+            <ul class="feature-list">
+              <li><i class="fas fa-check"></i> Publishes Prokip products</li>
+              <li><i class="fas fa-check"></i> Syncs prices & inventory</li>
+              <li><i class="fas fa-check"></i> Creates products in store</li>
+            </ul>
+            <button class="btn-primary">
+              <i class="fas fa-arrow-up"></i> Push to Store
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Product Matching Modal -->
+  <div id="product-matching-modal" class="modal">
+    <div class="modal-content large-modal">
+      <div class="modal-header">
+        <h2>Review Product Matches</h2>
+        <button class="modal-close" onclick="closeModal()">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div id="matching-summary" class="matching-summary"></div>
+        
+        <div class="matching-tabs">
+          <button class="tab-btn active" onclick="showMatchingTab('matched')">
+            Matched Products <span id="matched-count" class="badge">0</span>
+          </button>
+          <button class="tab-btn" onclick="showMatchingTab('unmatched-prokip')">
+            Unmatched (Prokip) <span id="unmatched-prokip-count" class="badge">0</span>
+          </button>
+          <button class="tab-btn" onclick="showMatchingTab('unmatched-store')">
+            Unmatched (Store) <span id="unmatched-store-count" class="badge">0</span>
+          </button>
+        </div>
+
+        <div id="matching-content" class="matching-content"></div>
+
+        <div class="modal-actions">
+          <button onclick="confirmMatches()" class="btn-primary">
+            <i class="fas fa-check"></i> Confirm & Continue
+          </button>
+          <button onclick="closeModal()" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Product Readiness Modal -->
+  <div id="product-readiness-modal" class="modal">
+    <div class="modal-content large-modal">
+      <div class="modal-header">
+        <h2>Product Readiness Check</h2>
+        <button class="modal-close" onclick="closeModal()">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div id="readiness-summary" class="readiness-summary"></div>
+        <div id="readiness-products" class="readiness-products"></div>
+
+        <div class="modal-actions">
+          <button onclick="publishProducts()" class="btn-primary" id="publish-btn">
+            <i class="fas fa-cloud-upload-alt"></i> Publish to Store
+          </button>
+          <button onclick="closeModal()" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sync Errors Modal -->
+  <div id="sync-errors-modal" class="modal">
+    <div class="modal-content large-modal">
+      <div class="modal-header">
+        <h2>Sync Errors</h2>
+        <button class="modal-close" onclick="closeModal()">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div id="errors-list" class="errors-list"></div>
+      </div>
+    </div>
   </div>
 
   <script src="script.js"></script>

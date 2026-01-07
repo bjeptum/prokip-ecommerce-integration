@@ -337,4 +337,22 @@ router.patch('/:id/settings', [
   }
 });
 
+// Disconnect store
+router.delete('/:id', async (req, res) => {
+  try {
+    const connectionId = parseInt(req.params.id);
+    
+    // Delete all related data
+    await prisma.inventoryCache.deleteMany({ where: { connectionId } });
+    await prisma.salesLog.deleteMany({ where: { connectionId } });
+    await prisma.syncError.deleteMany({ where: { connectionId } });
+    await prisma.connection.delete({ where: { id: connectionId } });
+    
+    res.json({ success: true, message: 'Store disconnected successfully' });
+  } catch (error) {
+    console.error('Failed to disconnect store:', error);
+    res.status(500).json({ error: 'Failed to disconnect store' });
+  }
+});
+
 module.exports = router;
