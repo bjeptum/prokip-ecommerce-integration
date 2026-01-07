@@ -285,6 +285,7 @@ async function processStoreToProkip(storeUrl, topic, data, platform) {
             connectionId: connection.id,
             orderId,
             prokipSellId: response.data.id?.toString(),
+            operationType: 'webhook',
             timestamp: new Date()
           }
         });

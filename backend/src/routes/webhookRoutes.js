@@ -25,11 +25,33 @@ router.post('/shopify', bodyParser.raw({ type: 'application/json' }), (req, res)
 
 // WooCommerce webhook endpoint (public)
 router.post('/woocommerce', express.json(), (req, res) => {
-  const data = req.body;
-  const storeUrl = data.resource?.site_url || data.site_url || '';
-  const topic = data.topic || 'order.created';
+  const signature = req.headers['x-wc-webhook-signature'];
+  const topic = req.headers['x-wc-webhook-topic'] || req.body.topic || 'order.created';
+  const source = req.headers['x-wc-webhook-source'];
+  
+  // Verify webhook signature if secret is configured
+  const webhookSecret = process.env.WEBHOOK_SECRET || process.env.WOO_WEBHOOK_SECRET;
+  if (webhookSecret && signature) {
+    const generatedSignature = crypto.createHmac('sha256', webhookSecret)
+      .update(JSON.stringify(req.body))
+      .digest('base64');
 
-  processStoreToProkip(storeUrl, topic, data, 'woocommerce');
+    if (generatedSignature !== signature) {
+      console.error('Invalid signature for WooCommerce webhook');
+      return res.status(401).send('Invalid signature');
+    }
+  }
+
+  const data = req.body;
+  const storeUrl = source || data.resource?.site_url || data.site_url || '';
+  
+  // Process webhook asynchronously to avoid timeout
+  setImmediate(() => {
+    processStoreToProkip(storeUrl, topic, data, 'woocommerce').catch(error => {
+      console.error('WooCommerce webhook processing failed:', error);
+    });
+  });
+
   res.status(200).send('OK');
 });
 

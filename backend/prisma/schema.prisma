@@ -46,15 +46,18 @@ model InventoryCache {
   sku          String
   quantity     Int
   connection   Connection @relation(fields: [connectionId], references: [id])
+
+  @@unique([connectionId, sku], name: "connectionId_sku")
 }
 
 model SalesLog {
-  id           Int        @id @default(autoincrement())
-  connectionId Int
-  orderId      String
-  prokipSellId String?
-  timestamp    DateTime   @default(now())
-  connection   Connection @relation(fields: [connectionId], references: [id])
+  id            Int        @id @default(autoincrement())
+  connectionId  Int
+  orderId       String
+  prokipSellId  String?
+  operationType String     @default("webhook") // "webhook", "sale", "purchase"
+  timestamp     DateTime   @default(now())
+  connection    Connection @relation(fields: [connectionId], references: [id])
 }
 
 model ProkipConfig {
