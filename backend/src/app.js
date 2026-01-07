@@ -12,6 +12,7 @@ const setupRoutes = require('./routes/setupRoutes');
 const syncRoutes = require('./routes/syncRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const storeRoutes = require('./routes/storeRoutes');
+const prokipRoutes = require('./routes/prokipRoutes');
 const authMiddleware = require('./middlewares/authMiddleware');
 const { pollProkipToStores } = require('./services/syncService');
 
@@ -56,6 +57,7 @@ app.use('/connections', skipAuthForCallbacks, connectionRoutes);
 app.use('/setup', authMiddleware, setupRoutes);
 app.use('/sync', authMiddleware, syncRoutes);
 app.use('/stores', authMiddleware, storeRoutes);
+app.use('/prokip', authMiddleware, prokipRoutes);
 
 // Root route - serve dashboard
 app.get('/', (req, res) => {

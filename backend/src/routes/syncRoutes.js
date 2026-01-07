@@ -14,13 +14,65 @@ router.post('/', async (req, res) => {
 
 router.get('/status', async (req, res) => {
   const connections = await prisma.connection.findMany();
-  res.json(connections.map(c => ({
-    id: c.id,
-    platform: c.platform,
-    storeUrl: c.storeUrl,
-    lastSync: c.lastSync,
-    syncEnabled: true // Add field if needed
-  })));
+
+  // Get Prokip transaction counts
+  const prokipConfig = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+  let prokipStats = { products: 0, sales: 0, purchases: 0 };
+
+  if (prokipConfig?.token && prokipConfig?.locationId) {
+    try {
+      // Get Prokip product count (this would need to be implemented in Prokip API)
+      // For now, we'll count from our database
+      const prokipProducts = await prisma.inventoryCache.groupBy({
+        by: ['sku'],
+        _count: { sku: true }
+      });
+      prokipStats.products = prokipProducts.length;
+
+      // Get sales and purchases from SalesLog
+      const salesCount = await prisma.salesLog.count({
+        where: { operationType: 'sale' }
+      });
+      const purchasesCount = await prisma.salesLog.count({
+        where: { operationType: 'purchase' }
+      });
+
+      prokipStats.sales = salesCount;
+      prokipStats.purchases = purchasesCount;
+    } catch (error) {
+      console.error('Error fetching Prokip stats:', error);
+    }
+  }
+
+  const connectionsWithStats = await Promise.all(connections.map(async (c) => {
+    // Get product count for this connection
+    const productCount = await prisma.inventoryCache.count({
+      where: { connectionId: c.id }
+    });
+
+    // Get order count from SalesLog for this connection
+    const orderCount = await prisma.salesLog.count({
+      where: {
+        connectionId: c.id,
+        operationType: 'sale'
+      }
+    });
+
+    return {
+      id: c.id,
+      platform: c.platform,
+      storeUrl: c.storeUrl,
+      lastSync: c.lastSync,
+      syncEnabled: c.syncEnabled || true,
+      productCount,
+      orderCount
+    };
+  }));
+
+  res.json({
+    stores: connectionsWithStats,
+    prokip: prokipStats
+  });
 });
 
 router.post('/pause', async (req, res) => {

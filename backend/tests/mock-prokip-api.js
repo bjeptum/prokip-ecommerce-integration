@@ -116,6 +116,63 @@ app.get('/connector/api/product/:id', (req, res) => {
   });
 });
 
+// CREATE product
+app.post('/connector/api/product', (req, res) => {
+  const { name, sku, sell_price, purchase_price, initial_quantity, location_id } = req.body;
+  
+  if (!name || !sku) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation error',
+      message: 'Name and SKU are required'
+    });
+  }
+  
+  // Check if SKU already exists
+  const existing = mockProducts.find(p => p.sku === sku);
+  if (existing) {
+    return res.status(409).json({
+      success: false,
+      error: 'Conflict',
+      message: 'Product with this SKU already exists'
+    });
+  }
+  
+  const newProduct = {
+    id: mockProducts.length + 1,
+    name,
+    sku,
+    product_variations: [
+      {
+        id: mockProducts.length + 1,
+        variations: [
+          {
+            id: mockProducts.length + 1,
+            sell_price_inc_tax: sell_price || 0,
+            default_purchase_price: purchase_price || 0,
+            qty_available: initial_quantity || 0
+          }
+        ]
+      }
+    ]
+  };
+  
+  mockProducts.push(newProduct);
+  
+  // Add to inventory
+  mockInventory.push({
+    sku,
+    quantity: initial_quantity || 0,
+    location_id: location_id || 'LOC001'
+  });
+  
+  res.status(201).json({
+    success: true,
+    data: newProduct,
+    message: 'Product created successfully'
+  });
+});
+
 // ========================================
 // INVENTORY ENDPOINTS
 // ========================================
@@ -150,6 +207,12 @@ app.put('/connector/api/inventory/:sku', (req, res) => {
   
   item.quantity = quantity;
   
+  // Also update product quantity
+  const product = mockProducts.find(p => p.sku === sku);
+  if (product && product.product_variations[0]) {
+    product.product_variations[0].variations[0].qty_available = quantity;
+  }
+  
   res.json({
     success: true,
     data: item,
@@ -157,11 +220,125 @@ app.put('/connector/api/inventory/:sku', (req, res) => {
   });
 });
 
+// CREATE purchase (add inventory)
+app.post('/connector/api/purchase', (req, res) => {
+  const { location_id, items, supplier_id, transaction_date, reference_no } = req.body;
+  
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation error',
+      message: 'Items array is required'
+    });
+  }
+  
+  const purchaseId = `PURCHASE-${Date.now()}`;
+  
+  // Update inventory (add quantities)
+  items.forEach(item => {
+    const product = mockProducts.find(p => p.id == item.product_id || p.sku === item.sku);
+    if (product && product.product_variations[0]) {
+      const variation = product.product_variations[0].variations[0];
+      variation.qty_available += item.quantity;
+      
+      // Update inventory too
+      const invItem = mockInventory.find(i => i.sku === product.sku);
+      if (invItem) {
+        invItem.quantity += item.quantity;
+      }
+    }
+  });
+  
+  const purchase = {
+    purchase_id: purchaseId,
+    location_id: location_id || 'LOC001',
+    supplier_id: supplier_id || 'default-supplier',
+    transaction_date: transaction_date || new Date().toISOString(),
+    reference_no: reference_no || purchaseId,
+    items,
+    total_amount: items.reduce((sum, item) => sum + (item.unit_cost * item.quantity), 0),
+    status: 'received'
+  };
+  
+  res.status(201).json({
+    success: true,
+    data: purchase,
+    message: 'Purchase created successfully'
+  });
+});
+
+// GET product stock report
+app.get('/connector/api/product-stock-report', (req, res) => {
+  const stockReport = mockProducts.map(p => ({
+    id: p.id,
+    name: p.name,
+    sku: p.sku,
+    stock: p.product_variations[0]?.variations[0]?.qty_available || 0,
+    qty_available: p.product_variations[0]?.variations[0]?.qty_available || 0,
+    sell_price: p.product_variations[0]?.variations[0]?.sell_price_inc_tax || 0
+  }));
+  
+  res.json(stockReport);
+});
+
 // ========================================
 // SALES ENDPOINTS
 // ========================================
 
-// CREATE sale
+// CREATE sale (existing endpoint - also add /sell for compatibility)
+app.post('/connector/api/sell', (req, res) => {
+  const { sells } = req.body;
+  
+  if (!sells || !Array.isArray(sells) || sells.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation error',
+      message: 'Sells array is required'
+    });
+  }
+  
+  const sell = sells[0]; // Process first sell
+  const { location_id, products, invoice_no, final_total } = sell;
+  
+  // Generate sell ID
+  const sellId = Date.now();
+  
+  // Update inventory (reduce quantities)
+  products.forEach(item => {
+    const product = mockProducts.find(p => p.id == item.product_id);
+    if (product && product.product_variations[0]) {
+      const variation = product.product_variations[0].variations[0];
+      variation.qty_available -= item.quantity;
+      
+      // Update inventory too
+      const invItem = mockInventory.find(i => i.sku === product.sku);
+      if (invItem) {
+        invItem.quantity -= item.quantity;
+      }
+    }
+  });
+  
+  const sale = {
+    id: sellId,
+    transaction_id: sellId,
+    location_id,
+    invoice_no,
+    final_total,
+    products,
+    status: 'final'
+  };
+  
+  mockSales.push(sale);
+  
+  res.status(201).json({
+    success: true,
+    id: sellId,
+    data: sale,
+    message: 'Sale created successfully'
+  });
+});
+
+// CREATE sale (legacy endpoint)
 app.post('/connector/api/sells', (req, res) => {
   const { location_id, items, contact_id, transaction_date } = req.body;
   
@@ -265,6 +442,31 @@ app.post('/connector/api/sells/:id/refund', (req, res) => {
   });
 });
 
+// CREATE sell-return (for webhook refunds)
+app.post('/connector/api/sell-return', (req, res) => {
+  const { transaction_id, products } = req.body;
+  
+  // Restore inventory
+  products.forEach(item => {
+    const product = mockProducts.find(p => p.sku === item.sku);
+    if (product && product.product_variations[0]) {
+      const variation = product.product_variations[0].variations[0];
+      variation.qty_available += item.quantity;
+      
+      const invItem = mockInventory.find(i => i.sku === product.sku);
+      if (invItem) {
+        invItem.quantity += item.quantity;
+      }
+    }
+  });
+  
+  res.json({
+    success: true,
+    message: 'Sell return processed successfully',
+    transaction_id
+  });
+});
+
 // ========================================
 // HEALTH CHECK
 // ========================================
@@ -275,8 +477,12 @@ app.get('/health', (req, res) => {
     message: 'Mock Prokip API is running',
     endpoints: {
       products: 'GET /connector/api/product',
+      createProduct: 'POST /connector/api/product',
       inventory: 'GET /connector/api/inventory',
-      createSale: 'POST /connector/api/sells',
+      stockReport: 'GET /connector/api/product-stock-report',
+      createSale: 'POST /connector/api/sell',
+      createPurchase: 'POST /connector/api/purchase',
+      sellReturn: 'POST /connector/api/sell-return',
       refund: 'POST /connector/api/sells/:id/refund'
     },
     note: 'Use token: mock_prokip_token_123'
@@ -296,9 +502,14 @@ app.listen(PORT, () => {
 📚 Available Endpoints:
    GET  /health
    GET  /connector/api/product
+   POST /connector/api/product              (NEW)
    GET  /connector/api/product/:id
    GET  /connector/api/inventory
+   GET  /connector/api/product-stock-report (NEW)
+   POST /connector/api/sell                 (NEW)
    POST /connector/api/sells
+   POST /connector/api/sell-return          (NEW)
+   POST /connector/api/purchase             (NEW)
    GET  /connector/api/sells/:id
    POST /connector/api/sells/:id/refund
 
