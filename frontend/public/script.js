@@ -101,22 +101,54 @@ function showNotification(type, message) {
 }
 
 // API call helper
-async function apiCall(endpoint, options = {}) {
-  const response = await fetch(endpoint, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...options.headers
-    }
-  });
+async function apiCall(endpoint, methodOrOptions = 'GET', data = null) {
+  console.log('apiCall:', endpoint, methodOrOptions, data);
 
-  if (response.status === 401) {
-    logout();
-    return;
+  let method = 'GET';
+  let options = {};
+
+  if (typeof methodOrOptions === 'string') {
+    method = methodOrOptions;
+    options = data ? { body: JSON.stringify(data) } : {};
+  } else {
+    options = methodOrOptions;
+    method = options.method || 'GET';
   }
 
-  return response;
+  console.log('token:', token ? 'present' : 'missing');
+
+  const config = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token && { Authorization: `Bearer ${token}` }),
+      ...options.headers
+    },
+    ...options
+  };
+
+  try {
+    const response = await fetch(endpoint, config);
+    console.log('Response status:', response.status);
+
+    if (response.status === 401) {
+      console.error('Authentication failed');
+      logout();
+      return;
+    }
+
+    const responseData = await response.json();
+    console.log('Response data:', responseData);
+
+    if (!response.ok) {
+      throw new Error(responseData.error || `HTTP ${response.status}`);
+    }
+
+    return responseData;
+  } catch (error) {
+    console.error('API call error:', error);
+    throw error;
+  }
 }
 
 // Prokip API call helper
@@ -321,6 +353,8 @@ function navigateTo(pageName) {
     loadDashboardData();
   } else if (pageName === 'settings') {
     loadConnectedStores();
+  } else if (pageName === 'prokip-operations') {
+    loadProkipProducts();
   } else if (pageName.startsWith('store-')) {
     if (!selectedStore) {
       showNotification('error', 'Please select a store first');
@@ -358,7 +392,7 @@ async function initiateShopifyConnection() {
   const storeUrl = document.getElementById('shopify-store-url').value.trim();
 
   if (!storeUrl) {
-    alert('Please enter your Shopify store URL');
+    showNotification('error', 'Please enter your Shopify store URL');
     return;
   }
 
@@ -374,25 +408,19 @@ async function initiateShopifyConnection() {
   `;
 
   try {
-    const res = await apiCall('/connections/shopify/initiate', {
-      method: 'POST',
-      body: JSON.stringify({ storeUrl })
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      // Redirect to Shopify OAuth
+    const data = await apiCall('/connections/shopify/initiate', 'POST', { storeUrl });
+    
+    // Redirect to Shopify OAuth
+    if (data.authUrl) {
       window.location.href = data.authUrl;
     } else {
-      const error = await res.json();
-      // Restore original content
-      modal.querySelector('.modal-body').innerHTML = originalContent;
-      alert('Failed to initiate Shopify connection: ' + (error.error || 'Unknown error'));
+      throw new Error('No authorization URL received');
     }
   } catch (error) {
+    console.error('Shopify connection error:', error);
     // Restore original content
     modal.querySelector('.modal-body').innerHTML = originalContent;
-    alert('Network error. Please try again.');
+    showNotification('error', 'Failed to initiate Shopify connection: ' + (error.message || 'Unknown error'));
   }
 }
 
@@ -402,45 +430,34 @@ async function connectWooCommerceStore() {
   const consumerSecret = document.getElementById('woo-consumer-secret').value.trim();
 
   if (!storeUrl || !consumerKey || !consumerSecret) {
-    alert('Please fill in all WooCommerce connection details');
+    showNotification('error', 'Please fill in all WooCommerce connection details');
     return;
   }
 
   try {
-    const res = await apiCall('/connections/woocommerce', {
-      method: 'POST',
-      body: JSON.stringify({
-        storeUrl,
-        consumerKey,
-        consumerSecret
-      })
+    await apiCall('/connections/woocommerce', 'POST', {
+      storeUrl,
+      consumerKey,
+      consumerSecret
     });
 
-    if (res.ok) {
-      alert('WooCommerce store connected successfully!');
-      closeModal();
-      loadConnectedStores();
-      loadDashboardData();
-    } else {
-      const error = await res.json();
-      alert('Failed to connect WooCommerce store: ' + (error.error || 'Unknown error'));
-    }
+    showNotification('success', 'WooCommerce store connected successfully!');
+    closeModal();
+    loadConnectedStores();
+    loadDashboardData();
   } catch (error) {
-    alert('Network error. Please try again.');
+    console.error('WooCommerce connection error:', error);
+    showNotification('error', 'Failed to connect WooCommerce store: ' + (error.message || 'Unknown error'));
   }
 }
 
 // Dashboard data loading
 async function loadDashboardData() {
   try {
-    const res = await apiCall('/sync/status');
-    const data = await res.json();
-
-    if (res.ok) {
-      updateDashboardStats(data);
-      updateStoresOverview(data.stores || data);
-      updateActivityFeed(data);
-    }
+    const data = await apiCall('/sync/status');
+    updateDashboardStats(data);
+    updateStoresOverview(data.stores || data);
+    updateActivityFeed(data);
   } catch (error) {
     console.error('Failed to load dashboard data:', error);
   }
@@ -559,13 +576,8 @@ async function selectProductSource(method) {
     showNotification('info', 'Loading product matches...');
     
     try {
-      const res = await apiCall(`/setup/products/matches?connectionId=${selectedConnectionId}`);
-      if (res.ok) {
-        productMatchesData = await res.json();
-        displayProductMatches();
-      } else {
-        showNotification('error', 'Failed to load product matches');
-      }
+      productMatchesData = await apiCall(`/setup/products/matches?connectionId=${selectedConnectionId}`);
+      displayProductMatches();
     } catch (error) {
       console.error('Failed to load matches:', error);
       showNotification('error', 'Error loading product matches');
@@ -575,17 +587,8 @@ async function selectProductSource(method) {
     showNotification('info', 'Checking product readiness...');
     
     try {
-      const res = await apiCall('/setup/products/readiness-check', {
-        method: 'POST',
-        body: JSON.stringify({ connectionId: selectedConnectionId })
-      });
-      
-      if (res.ok) {
-        productReadinessData = await res.json();
-        displayProductReadiness();
-      } else {
-        showNotification('error', 'Failed to check product readiness');
-      }
+      productReadinessData = await apiCall('/setup/products/readiness-check', 'POST', { connectionId: selectedConnectionId });
+      displayProductReadiness();
     } catch (error) {
       console.error('Failed readiness check:', error);
       showNotification('error', 'Error checking product readiness');
@@ -877,15 +880,10 @@ function displaySyncErrors(errors) {
 
 async function resolveError(errorId) {
   try {
-    const res = await apiCall(`/sync/errors/${errorId}/resolve`, { method: 'PATCH' });
-    
-    if (res.ok) {
-      showNotification('success', 'Error marked as resolved');
-      // Reload errors
-      showSyncErrors();
-    } else {
-      showNotification('error', 'Failed to resolve error');
-    }
+    await apiCall(`/sync/errors/${errorId}/resolve`, 'PATCH');
+    showNotification('success', 'Error marked as resolved');
+    // Reload errors
+    showSyncErrors();
   } catch (error) {
     console.error('Failed to resolve error:', error);
     showNotification('error', 'Error resolving sync error');
@@ -980,25 +978,20 @@ async function disconnectStore(storeId) {
   }
 
   try {
-    const res = await apiCall(`/connections/${storeId}`, { method: 'DELETE' });
-
-    if (res.ok) {
-      alert('Store disconnected successfully');
-      loadConnectedStores();
-      loadDashboardData();
-      
-      // If we disconnected the selected store, go back to home
-      if (selectedStore && selectedStore.id === storeId) {
-        selectedStore = null;
-        document.getElementById('store-menu-section').style.display = 'none';
-        navigateTo('home');
-      }
-    } else {
-      const error = await res.json();
-      alert('Failed to disconnect store: ' + (error.error || 'Unknown error'));
+    await apiCall(`/connections/${storeId}`, 'DELETE');
+    showNotification('success', 'Store disconnected successfully');
+    loadConnectedStores();
+    loadDashboardData();
+    
+    // If we disconnected the selected store, go back to home
+    if (selectedStore && selectedStore.id === storeId) {
+      selectedStore = null;
+      document.getElementById('store-menu-section').style.display = 'none';
+      navigateTo('home');
     }
   } catch (error) {
-    alert('Network error. Please try again.');
+    console.error('Disconnect error:', error);
+    showNotification('error', 'Failed to disconnect store: ' + (error.message || 'Unknown error'));
   }
 }
 
@@ -1025,16 +1018,37 @@ async function loadStoreProducts() {
   content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading products...</p>';
 
   try {
-    // Fetch products directly from the store
-    const res = await apiCall(`/stores/${selectedStore.id}/products`);
-    if (res.ok) {
-      const products = await res.json();
-      displayProducts(products);
-    } else {
-      content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">Failed to load products</p>';
-    }
+    const products = await apiCall(`/stores/${selectedStore.id}/products`);
+    displayProducts(products);
   } catch (error) {
-    content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">Error loading products</p>';
+    console.error('Failed to load products:', error);
+    
+    // Check if it's an authentication error
+    if (error.message && (error.message.includes('authentication') || error.message.includes('Invalid API key'))) {
+      content.innerHTML = `
+        <div class="empty-state-card" style="border-color: var(--warning-color);">
+          <div class="empty-state-icon" style="color: var(--warning-color);">
+            <i class="fas fa-exclamation-triangle"></i>
+          </div>
+          <h3>Authentication Error</h3>
+          <p>Your ${selectedStore.platform} store connection has expired or is invalid.</p>
+          <p style="margin-top: 10px;">Please disconnect and reconnect this store from Settings.</p>
+          <button onclick="navigateTo('settings')" class="btn-primary" style="margin-top: 20px;">
+            <i class="fas fa-cog"></i> Go to Settings
+          </button>
+        </div>
+      `;
+    } else {
+      content.innerHTML = `
+        <div class="empty-state-card">
+          <div class="empty-state-icon">
+            <i class="fas fa-exclamation-circle"></i>
+          </div>
+          <h3>Error Loading Products</h3>
+          <p>${error.message || 'Failed to load products from store'}</p>
+        </div>
+      `;
+    }
   }
 }
 
@@ -1288,16 +1302,9 @@ async function syncStoreOrders() {
 
   try {
     showNotification('info', 'Pulling orders from store...');
-    const res = await apiCall('/sync/pull-orders', { method: 'POST' });
-    
-    if (res.ok) {
-      const data = await res.json();
-      showNotification('success', data.message || 'Orders synced successfully');
-      setTimeout(() => loadStoreOrders(), 2000);
-    } else {
-      const error = await res.json();
-      showNotification('error', error.error || 'Failed to sync orders');
-    }
+    const data = await apiCall('/sync/pull-orders', 'POST');
+    showNotification('success', data.message || 'Orders synced successfully');
+    setTimeout(() => loadStoreOrders(), 2000);
   } catch (error) {
     console.error('Order sync error:', error);
     showNotification('error', 'Error syncing orders');
@@ -1308,6 +1315,12 @@ async function syncStoreOrders() {
 
 // Open Create Product Modal
 function openCreateProductModal() {
+  if (!currentBusinessLocation) {
+    showNotification('error', 'Please select a business location first');
+    navigateTo('home'); // Go to home page where location selection might be available
+    return;
+  }
+  
   document.getElementById('create-product-modal').style.display = 'flex';
   // Reset form
   document.getElementById('product-name').value = '';
@@ -1321,12 +1334,23 @@ function openCreateProductModal() {
 
 // Create Product
 async function createProduct() {
+  console.log('createProduct called');
   const name = document.getElementById('product-name').value.trim();
   const sku = document.getElementById('product-sku').value.trim();
   const sellPrice = parseFloat(document.getElementById('product-sell-price').value);
   const purchasePrice = parseFloat(document.getElementById('product-purchase-price').value);
   const quantity = parseInt(document.getElementById('product-quantity').value);
   const description = document.getElementById('product-description').value.trim();
+
+  console.log('Form values:', { name, sku, sellPrice, purchasePrice, quantity, description });
+  console.log('currentBusinessLocation:', currentBusinessLocation);
+
+  // Check if business location is selected
+  if (!currentBusinessLocation) {
+    showNotification('error', 'Please select a business location first');
+    console.error('No business location selected');
+    return;
+  }
 
   // Validation
   if (!name || !sku || isNaN(sellPrice) || isNaN(purchasePrice) || isNaN(quantity)) {
@@ -1340,6 +1364,7 @@ async function createProduct() {
   }
 
   try {
+    console.log('Making API call to create product...');
     const response = await apiCall('/prokip/products', 'POST', {
       name,
       sku,
@@ -1349,6 +1374,7 @@ async function createProduct() {
       description,
       locationId: currentBusinessLocation.id
     });
+    console.log('API response:', response);
 
     // Display results
     const resultDiv = document.getElementById('create-product-result');
@@ -1372,6 +1398,9 @@ async function createProduct() {
       resultDiv.innerHTML = html;
       
       showNotification('success', `Product "${name}" created successfully`);
+      
+      // Refresh the products list
+      loadProkipProducts();
       
       // Reset form after 3 seconds
       setTimeout(() => {
@@ -1482,9 +1511,13 @@ async function recordSale() {
 
   try {
     const response = await apiCall('/prokip/sales', 'POST', {
+      products: items.map(item => ({
+        sku: item.sku,
+        quantity: item.quantity,
+        unitPrice: item.price
+      })),
       customerName: customerName || 'Walk-in Customer',
-      items,
-      discount,
+      paymentMethod: 'cash',
       locationId: currentBusinessLocation.id
     });
 
@@ -1623,8 +1656,13 @@ async function recordPurchase() {
 
   try {
     const response = await apiCall('/prokip/purchases', 'POST', {
+      products: items.map(item => ({
+        sku: item.sku,
+        quantity: item.quantity,
+        unitCost: item.cost
+      })),
       supplierName,
-      items,
+      referenceNo: `PURCHASE-${Date.now()}`,
       locationId: currentBusinessLocation.id
     });
 
@@ -1663,6 +1701,95 @@ async function recordPurchase() {
     resultDiv.innerHTML = `<h4><i class="fas fa-exclamation-circle"></i> Error</h4><p>${error.message || 'Failed to record purchase'}</p>`;
     showNotification('error', error.message || 'Failed to record purchase');
   }
+}
+
+// Load and display Prokip products
+async function loadProkipProducts() {
+  const productsList = document.getElementById('prokip-products-list');
+
+  try {
+    // Show loading state
+    productsList.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-spinner fa-spin"></i>
+        <p>Loading products...</p>
+      </div>
+    `;
+
+    // Fetch products from setup route (which gets from Prokip)
+    const response = await apiCall('/setup/products', 'GET');
+
+    if (response.data && response.data.length > 0) {
+      let html = '';
+
+      response.data.forEach(product => {
+        const sellPrice = product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || '0.00';
+        const quantity = product.product_variations?.[0]?.variations?.[0]?.variation_location_details?.[0]?.qty_available || '0';
+        const sku = product.sku;
+
+        html += `
+          <div class="product-item">
+            <div class="product-icon">
+              <i class="fas fa-box"></i>
+            </div>
+            <div class="product-details">
+              <div class="product-name">${product.name}</div>
+              <div class="product-meta">
+                <span class="product-price">
+                  <i class="fas fa-tag"></i> $${sellPrice}
+                </span>
+                <span class="product-stock">
+                  <i class="fas fa-warehouse"></i> ${quantity} in stock
+                </span>
+                <span class="product-sku">
+                  <i class="fas fa-hashtag"></i> ${sku}
+                </span>
+              </div>
+            </div>
+            <div class="product-actions">
+              <button class="btn-small" onclick="viewProductDetails(${product.id})" title="View Details">
+                <i class="fas fa-eye"></i> View
+              </button>
+              <button class="btn-small" onclick="editProduct(${product.id})" title="Edit Product">
+                <i class="fas fa-edit"></i> Edit
+              </button>
+            </div>
+          </div>
+        `;
+      });
+
+      productsList.innerHTML = html;
+    } else {
+      productsList.innerHTML = `
+        <div class="empty-state">
+          <i class="fas fa-boxes"></i>
+          <p>No products found in Prokip</p>
+          <small>Create your first product using the "Create Product" button above</small>
+        </div>
+      `;
+    }
+  } catch (error) {
+    console.error('Error loading Prokip products:', error);
+    productsList.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-exclamation-triangle"></i>
+        <p>Failed to load products</p>
+        <small>${error.message || 'Please check your connection and try again'}</small>
+      </div>
+    `;
+  }
+}
+
+// View product details (placeholder for future implementation)
+function viewProductDetails(productId) {
+  showNotification('info', `Viewing details for product ID: ${productId}`);
+  // TODO: Implement detailed product view modal
+}
+
+// Edit product (placeholder for future implementation)
+function editProduct(productId) {
+  showNotification('info', `Editing product ID: ${productId}`);
+  // TODO: Implement product editing functionality
 }
 
 // Close dropdown when clicking outside
