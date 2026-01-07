@@ -1,0 +1,9 @@
+{
+  "products": [],
+  "sales": [],
+  "purchases": [],
+  "sellReturns": [],
+  "nextProductId": 1,
+  "nextSaleId": 1,
+  "nextPurchaseId": 1
+}

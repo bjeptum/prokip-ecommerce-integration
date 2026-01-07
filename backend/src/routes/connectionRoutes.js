@@ -109,6 +109,17 @@ router.get('/callback/shopify', async (req, res) => {
 
     const accessToken = tokenResponse.data.access_token;
 
+    // Validate the token by making a test API call
+    try {
+      await axios.get(`https://${shop}/admin/api/2026-01/shop.json`, {
+        headers: { 'X-Shopify-Access-Token': accessToken }
+      });
+      console.log(`✓ Token validated for ${shop}`);
+    } catch (validationError) {
+      console.error('Token validation failed:', validationError.response?.data || validationError.message);
+      throw new Error('Received invalid access token from Shopify');
+    }
+
     if (existingConnection) {
       // Update existing connection
       await prisma.connection.update({
@@ -192,6 +203,21 @@ router.post('/woocommerce', [
   const { storeUrl, consumerKey, consumerSecret } = req.body;
 
   try {
+    // Validate credentials by making a test API call
+    const normalizedUrl = storeUrl.replace(/\/$/, '');
+    try {
+      await axios.get(`${normalizedUrl}/wp-json/wc/v3/system_status`, {
+        auth: { username: consumerKey, password: consumerSecret }
+      });
+      console.log(`✓ WooCommerce credentials validated for ${storeUrl}`);
+    } catch (validationError) {
+      console.error('WooCommerce validation failed:', validationError.response?.data || validationError.message);
+      return res.status(401).json({ 
+        error: 'Invalid WooCommerce credentials',
+        message: 'The Consumer Key or Consumer Secret is incorrect. Please check your credentials and try again.'
+      });
+    }
+
     // Check if connection already exists
     const existingConnection = await prisma.connection.findFirst({
       where: {
@@ -307,10 +333,21 @@ router.get('/status', async (req, res) => {
 // Disconnect store
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
+  const connectionId = parseInt(id);
+  
   try {
-    await prisma.connection.delete({ where: { id: parseInt(id) } });
+    // Delete all related data first (cascade delete)
+    await prisma.inventoryCache.deleteMany({ where: { connectionId } });
+    await prisma.salesLog.deleteMany({ where: { connectionId } });
+    await prisma.syncError.deleteMany({ where: { connectionId } });
+    
+    // Now delete the connection
+    await prisma.connection.delete({ where: { id: connectionId } });
+    
+    console.log(`✓ Deleted connection ${connectionId} and all related data`);
     res.json({ success: true });
   } catch (error) {
+    console.error('Failed to disconnect store:', error);
     res.status(500).json({ error: 'Failed to disconnect' });
   }
 });

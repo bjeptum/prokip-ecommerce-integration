@@ -21,15 +21,30 @@ router.get('/:id/products', async (req, res) => {
     let products = [];
     
     if (connection.platform === 'shopify') {
-      const rawProducts = await getShopifyProducts(connection.storeUrl, connection.accessToken);
-      products = rawProducts.map(p => ({
-        id: p.id,
-        name: p.title,
-        sku: p.variants[0]?.sku || 'N/A',
-        price: p.variants[0]?.price || '0.00',
-        stock: p.variants[0]?.inventory_quantity || 0,
-        synced: true
-      }));
+      try {
+        const rawProducts = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+        products = rawProducts.map(p => ({
+          id: p.id,
+          name: p.title,
+          sku: p.variants[0]?.sku || 'N/A',
+          price: p.variants[0]?.price || '0.00',
+          stock: p.variants[0]?.inventory_quantity || 0,
+          synced: true
+        }));
+      } catch (error) {
+        console.error(`Shopify API error for ${connection.storeUrl}:`, error.message);
+        
+        // If it's an authentication error, suggest reconnecting
+        if (error.message.includes('Invalid API key') || error.message.includes('access token')) {
+          return res.status(401).json({ 
+            error: 'Shopify authentication failed',
+            message: 'Please reconnect your Shopify store. The access token may have expired or been revoked.',
+            reconnect: true,
+            connectionId: connectionId
+          });
+        }
+        throw error;
+      }
     } else if (connection.platform === 'woocommerce') {
       const rawProducts = await getWooProducts(connection.storeUrl, connection.consumerKey, connection.consumerSecret);
       products = rawProducts.map(p => ({
