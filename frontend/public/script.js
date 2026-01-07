@@ -336,15 +336,18 @@ function toggleProfileMenu() {
 function closeModal() {
   document.querySelectorAll('.modal').forEach(modal => {
     modal.classList.remove('show');
+    modal.style.display = 'none';
   });
 }
 
 function connectShopify() {
   document.getElementById('shopify-modal').classList.add('show');
+  document.getElementById('shopify-modal').style.display = 'flex';
 }
 
 function connectWooCommerce() {
   document.getElementById('woocommerce-modal').classList.add('show');
+  document.getElementById('woocommerce-modal').style.display = 'flex';
 }
 
 // Connection functions
@@ -432,7 +435,7 @@ async function loadDashboardData() {
 
     if (res.ok) {
       updateDashboardStats(data);
-      updateStoresOverview(data);
+      updateStoresOverview(data.stores || data);
       updateActivityFeed(data);
     }
   } catch (error) {
@@ -441,14 +444,22 @@ async function loadDashboardData() {
 }
 
 function updateDashboardStats(data) {
-  const totalStores = data.length;
-  const totalProducts = data.reduce((sum, store) => sum + (store.productCount || 0), 0);
-  const totalOrders = data.reduce((sum, store) => sum + (store.orderCount || 0), 0);
+  const stores = data.stores || data;
+  const prokip = data.prokip || { products: 0, sales: 0, purchases: 0 };
+
+  const totalStores = stores.length;
+  const totalProducts = stores.reduce((sum, store) => sum + (store.productCount || 0), 0) + prokip.products;
+  const totalOrders = stores.reduce((sum, store) => sum + (store.orderCount || 0), 0) + prokip.sales + prokip.purchases;
 
   document.getElementById('total-stores').textContent = totalStores;
   document.getElementById('total-products').textContent = totalProducts;
   document.getElementById('total-orders').textContent = totalOrders;
   document.getElementById('sync-status').textContent = 'Active';
+
+  // Update Prokip-specific stats
+  document.getElementById('prokip-products').textContent = prokip.products;
+  document.getElementById('prokip-sales').textContent = prokip.sales;
+  document.getElementById('prokip-purchases').textContent = prokip.purchases;
 }
 
 function updateStoresOverview(stores) {
@@ -920,6 +931,367 @@ async function syncStoreOrders() {
   } catch (error) {
     console.error('Order sync error:', error);
     showNotification('error', 'Error syncing orders');
+  }
+}
+
+// Prokip Operations Functions
+
+// Open Create Product Modal
+function openCreateProductModal() {
+  document.getElementById('create-product-modal').style.display = 'flex';
+  // Reset form
+  document.getElementById('product-name').value = '';
+  document.getElementById('product-sku').value = '';
+  document.getElementById('product-sell-price').value = '';
+  document.getElementById('product-purchase-price').value = '';
+  document.getElementById('product-quantity').value = '';
+  document.getElementById('product-description').value = '';
+  document.getElementById('create-product-result').style.display = 'none';
+}
+
+// Create Product
+async function createProduct() {
+  const name = document.getElementById('product-name').value.trim();
+  const sku = document.getElementById('product-sku').value.trim();
+  const sellPrice = parseFloat(document.getElementById('product-sell-price').value);
+  const purchasePrice = parseFloat(document.getElementById('product-purchase-price').value);
+  const quantity = parseInt(document.getElementById('product-quantity').value);
+  const description = document.getElementById('product-description').value.trim();
+
+  // Validation
+  if (!name || !sku || isNaN(sellPrice) || isNaN(purchasePrice) || isNaN(quantity)) {
+    showNotification('error', 'Please fill in all required fields');
+    return;
+  }
+
+  if (sellPrice < 0 || purchasePrice < 0 || quantity < 0) {
+    showNotification('error', 'Prices and quantity must be positive numbers');
+    return;
+  }
+
+  try {
+    const response = await apiCall('/prokip/products', 'POST', {
+      name,
+      sku,
+      sellPrice,
+      purchasePrice,
+      quantity,
+      description,
+      locationId: currentBusinessLocation.id
+    });
+
+    // Display results
+    const resultDiv = document.getElementById('create-product-result');
+    resultDiv.style.display = 'block';
+    
+    if (response.prokipResult && response.storeResults) {
+      let html = '<h4><i class="fas fa-check-circle"></i> Product Created Successfully</h4>';
+      html += '<ul>';
+      html += `<li class="success-item"><i class="fas fa-check"></i> Created in Prokip</li>`;
+      
+      response.storeResults.forEach(result => {
+        if (result.success) {
+          html += `<li class="success-item"><i class="fas fa-check"></i> Synced to ${result.store}</li>`;
+        } else {
+          html += `<li class="error-item"><i class="fas fa-times"></i> Failed to sync to ${result.store}: ${result.error}</li>`;
+        }
+      });
+      
+      html += '</ul>';
+      resultDiv.className = 'operation-result success';
+      resultDiv.innerHTML = html;
+      
+      showNotification('success', `Product "${name}" created successfully`);
+      
+      // Reset form after 3 seconds
+      setTimeout(() => {
+        closeModal();
+      }, 3000);
+    }
+  } catch (error) {
+    const resultDiv = document.getElementById('create-product-result');
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'operation-result error';
+    resultDiv.innerHTML = `<h4><i class="fas fa-exclamation-circle"></i> Error</h4><p>${error.message || 'Failed to create product'}</p>`;
+    showNotification('error', error.message || 'Failed to create product');
+  }
+}
+
+// Open Record Sale Modal
+function openRecordSaleModal() {
+  document.getElementById('record-sale-modal').style.display = 'flex';
+  // Reset form
+  document.getElementById('sale-customer-name').value = '';
+  document.getElementById('sale-discount').value = '0';
+  document.getElementById('record-sale-result').style.display = 'none';
+  
+  // Reset to single item
+  const itemsList = document.getElementById('sale-items-list');
+  itemsList.innerHTML = `
+    <div class="sale-item-row">
+      <div class="form-group">
+        <input type="text" class="sale-item-sku" placeholder="SKU" required />
+      </div>
+      <div class="form-group">
+        <input type="number" class="sale-item-quantity" placeholder="Quantity" step="1" min="1" required />
+      </div>
+      <div class="form-group">
+        <input type="number" class="sale-item-price" placeholder="Unit Price" step="0.01" min="0" required />
+      </div>
+      <button type="button" class="btn-icon" onclick="removeSaleItem(this)" disabled>
+        <i class="fas fa-trash"></i>
+      </button>
+    </div>
+  `;
+}
+
+// Add Sale Item
+function addSaleItem() {
+  const itemsList = document.getElementById('sale-items-list');
+  const newItem = document.createElement('div');
+  newItem.className = 'sale-item-row';
+  newItem.innerHTML = `
+    <div class="form-group">
+      <input type="text" class="sale-item-sku" placeholder="SKU" required />
+    </div>
+    <div class="form-group">
+      <input type="number" class="sale-item-quantity" placeholder="Quantity" step="1" min="1" required />
+    </div>
+    <div class="form-group">
+      <input type="number" class="sale-item-price" placeholder="Unit Price" step="0.01" min="0" required />
+    </div>
+    <button type="button" class="btn-icon" onclick="removeSaleItem(this)">
+      <i class="fas fa-trash"></i>
+    </button>
+  `;
+  itemsList.appendChild(newItem);
+  updateSaleItemButtons();
+}
+
+// Remove Sale Item
+function removeSaleItem(button) {
+  button.closest('.sale-item-row').remove();
+  updateSaleItemButtons();
+}
+
+// Update Sale Item Buttons
+function updateSaleItemButtons() {
+  const items = document.querySelectorAll('.sale-item-row');
+  items.forEach((item, index) => {
+    const deleteBtn = item.querySelector('.btn-icon');
+    deleteBtn.disabled = items.length === 1;
+  });
+}
+
+// Record Sale
+async function recordSale() {
+  const customerName = document.getElementById('sale-customer-name').value.trim();
+  const discount = parseFloat(document.getElementById('sale-discount').value) || 0;
+  
+  // Collect items
+  const items = [];
+  const itemRows = document.querySelectorAll('.sale-item-row');
+  
+  for (const row of itemRows) {
+    const sku = row.querySelector('.sale-item-sku').value.trim();
+    const quantity = parseInt(row.querySelector('.sale-item-quantity').value);
+    const price = parseFloat(row.querySelector('.sale-item-price').value);
+    
+    if (!sku || isNaN(quantity) || isNaN(price) || quantity <= 0 || price < 0) {
+      showNotification('error', 'Please fill in all item fields correctly');
+      return;
+    }
+    
+    items.push({ sku, quantity, price });
+  }
+  
+  if (items.length === 0) {
+    showNotification('error', 'Please add at least one item');
+    return;
+  }
+
+  try {
+    const response = await apiCall('/prokip/sales', 'POST', {
+      customerName: customerName || 'Walk-in Customer',
+      items,
+      discount,
+      locationId: currentBusinessLocation.id
+    });
+
+    // Display results
+    const resultDiv = document.getElementById('record-sale-result');
+    resultDiv.style.display = 'block';
+    
+    if (response.prokipResult && response.storeResults) {
+      let html = '<h4><i class="fas fa-check-circle"></i> Sale Recorded Successfully</h4>';
+      html += '<ul>';
+      html += `<li class="success-item"><i class="fas fa-check"></i> Recorded in Prokip</li>`;
+      
+      response.storeResults.forEach(result => {
+        if (result.success) {
+          html += `<li class="success-item"><i class="fas fa-check"></i> Inventory updated in ${result.store}</li>`;
+        } else {
+          html += `<li class="error-item"><i class="fas fa-times"></i> Failed to update ${result.store}: ${result.error}</li>`;
+        }
+      });
+      
+      html += '</ul>';
+      resultDiv.className = 'operation-result success';
+      resultDiv.innerHTML = html;
+      
+      showNotification('success', 'Sale recorded successfully');
+      
+      // Reset form after 3 seconds
+      setTimeout(() => {
+        closeModal();
+      }, 3000);
+    }
+  } catch (error) {
+    const resultDiv = document.getElementById('record-sale-result');
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'operation-result error';
+    resultDiv.innerHTML = `<h4><i class="fas fa-exclamation-circle"></i> Error</h4><p>${error.message || 'Failed to record sale'}</p>`;
+    showNotification('error', error.message || 'Failed to record sale');
+  }
+}
+
+// Open Record Purchase Modal
+function openRecordPurchaseModal() {
+  document.getElementById('record-purchase-modal').style.display = 'flex';
+  // Reset form
+  document.getElementById('purchase-supplier-name').value = '';
+  document.getElementById('record-purchase-result').style.display = 'none';
+  
+  // Reset to single item
+  const itemsList = document.getElementById('purchase-items-list');
+  itemsList.innerHTML = `
+    <div class="purchase-item-row">
+      <div class="form-group">
+        <input type="text" class="purchase-item-sku" placeholder="SKU" required />
+      </div>
+      <div class="form-group">
+        <input type="number" class="purchase-item-quantity" placeholder="Quantity" step="1" min="1" required />
+      </div>
+      <div class="form-group">
+        <input type="number" class="purchase-item-cost" placeholder="Unit Cost" step="0.01" min="0" required />
+      </div>
+      <button type="button" class="btn-icon" onclick="removePurchaseItem(this)" disabled>
+        <i class="fas fa-trash"></i>
+      </button>
+    </div>
+  `;
+}
+
+// Add Purchase Item
+function addPurchaseItem() {
+  const itemsList = document.getElementById('purchase-items-list');
+  const newItem = document.createElement('div');
+  newItem.className = 'purchase-item-row';
+  newItem.innerHTML = `
+    <div class="form-group">
+      <input type="text" class="purchase-item-sku" placeholder="SKU" required />
+    </div>
+    <div class="form-group">
+      <input type="number" class="purchase-item-quantity" placeholder="Quantity" step="1" min="1" required />
+    </div>
+    <div class="form-group">
+      <input type="number" class="purchase-item-cost" placeholder="Unit Cost" step="0.01" min="0" required />
+    </div>
+    <button type="button" class="btn-icon" onclick="removePurchaseItem(this)">
+      <i class="fas fa-trash"></i>
+    </button>
+  `;
+  itemsList.appendChild(newItem);
+  updatePurchaseItemButtons();
+}
+
+// Remove Purchase Item
+function removePurchaseItem(button) {
+  button.closest('.purchase-item-row').remove();
+  updatePurchaseItemButtons();
+}
+
+// Update Purchase Item Buttons
+function updatePurchaseItemButtons() {
+  const items = document.querySelectorAll('.purchase-item-row');
+  items.forEach((item, index) => {
+    const deleteBtn = item.querySelector('.btn-icon');
+    deleteBtn.disabled = items.length === 1;
+  });
+}
+
+// Record Purchase
+async function recordPurchase() {
+  const supplierName = document.getElementById('purchase-supplier-name').value.trim();
+  
+  if (!supplierName) {
+    showNotification('error', 'Please enter supplier name');
+    return;
+  }
+  
+  // Collect items
+  const items = [];
+  const itemRows = document.querySelectorAll('.purchase-item-row');
+  
+  for (const row of itemRows) {
+    const sku = row.querySelector('.purchase-item-sku').value.trim();
+    const quantity = parseInt(row.querySelector('.purchase-item-quantity').value);
+    const cost = parseFloat(row.querySelector('.purchase-item-cost').value);
+    
+    if (!sku || isNaN(quantity) || isNaN(cost) || quantity <= 0 || cost < 0) {
+      showNotification('error', 'Please fill in all item fields correctly');
+      return;
+    }
+    
+    items.push({ sku, quantity, cost });
+  }
+  
+  if (items.length === 0) {
+    showNotification('error', 'Please add at least one item');
+    return;
+  }
+
+  try {
+    const response = await apiCall('/prokip/purchases', 'POST', {
+      supplierName,
+      items,
+      locationId: currentBusinessLocation.id
+    });
+
+    // Display results
+    const resultDiv = document.getElementById('record-purchase-result');
+    resultDiv.style.display = 'block';
+    
+    if (response.prokipResult && response.storeResults) {
+      let html = '<h4><i class="fas fa-check-circle"></i> Purchase Recorded Successfully</h4>';
+      html += '<ul>';
+      html += `<li class="success-item"><i class="fas fa-check"></i> Recorded in Prokip</li>`;
+      
+      response.storeResults.forEach(result => {
+        if (result.success) {
+          html += `<li class="success-item"><i class="fas fa-check"></i> Inventory updated in ${result.store}</li>`;
+        } else {
+          html += `<li class="error-item"><i class="fas fa-times"></i> Failed to update ${result.store}: ${result.error}</li>`;
+        }
+      });
+      
+      html += '</ul>';
+      resultDiv.className = 'operation-result success';
+      resultDiv.innerHTML = html;
+      
+      showNotification('success', 'Purchase recorded successfully');
+      
+      // Reset form after 3 seconds
+      setTimeout(() => {
+        closeModal();
+      }, 3000);
+    }
+  } catch (error) {
+    const resultDiv = document.getElementById('record-purchase-result');
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'operation-result error';
+    resultDiv.innerHTML = `<h4><i class="fas fa-exclamation-circle"></i> Error</h4><p>${error.message || 'Failed to record purchase'}</p>`;
+    showNotification('error', error.message || 'Failed to record purchase');
   }
 }
 
