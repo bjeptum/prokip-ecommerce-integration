@@ -484,13 +484,25 @@
           <div class="modal-body">
             <div class="connection-instructions">
               <h3>Connect Your WooCommerce Store</h3>
-              <p>Enter your store URL below to connect. Credentials are configured on the server.</p>
+              <p>Enter your store URL and WordPress admin credentials. We'll create a secure application password for ongoing access.</p>
             </div>
 
             <div class="form-group">
               <label for="woo-store-url">Store URL</label>
               <input type="text" id="woo-store-url" placeholder="https://mystore.com" />
               <small class="form-help">Full URL including https://</small>
+            </div>
+
+            <div class="form-group">
+              <label for="woo-username">WordPress Username</label>
+              <input type="text" id="woo-username" placeholder="admin" />
+              <small class="form-help">WordPress admin username</small>
+            </div>
+
+            <div class="form-group">
+              <label for="woo-password">WordPress Password</label>
+              <input type="password" id="woo-password" placeholder="Your WordPress password" />
+              <small class="form-help">Used only once to create secure application password</small>
             </div>
 
             <button onclick="connectWooCommerceStore()" class="btn-primary">

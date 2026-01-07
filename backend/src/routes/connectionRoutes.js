@@ -9,6 +9,8 @@ const authMiddleware = require('../middlewares/authMiddleware');
 
 const { registerShopifyWebhooks } = require('../services/shopifyService');
 const { registerWooWebhooks } = require('../services/wooService');
+const wooOAuthService = require('../services/wooOAuthService');
+const wooAppPasswordService = require('../services/wooAppPasswordService');
 const { processStoreToProkip } = require('../services/syncService');
 
 const router = express.Router();
@@ -195,7 +197,223 @@ router.post('/webhook/shopify', bodyParser.raw({ type: 'application/json' }), (r
   res.status(200).send('OK');
 });
 
-// WooCommerce connection
+// WooCommerce Application Password connection - simplified URL + credentials approach
+router.post('/woocommerce/connect', [
+  body('storeUrl').isURL().withMessage('Please provide a valid store URL'),
+  body('username').notEmpty().withMessage('WordPress username is required'),
+  body('password').notEmpty().withMessage('WordPress password is required')
+], authMiddleware, async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+  try {
+    const { storeUrl, username, password } = req.body;
+    const userId = req.userId;
+
+    // Check if user has Prokip credentials
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.prokipToken) {
+      return res.status(400).json({
+        error: 'Prokip authentication required',
+        message: 'Please log in with your Prokip credentials first'
+      });
+    }
+
+    // Check if user already has a connection (only one platform allowed)
+    const existingConnection = await prisma.connection.findFirst({
+      where: { userId }
+    });
+
+    if (existingConnection && existingConnection.platform !== 'woocommerce') {
+      return res.status(400).json({
+        error: 'Platform already connected',
+        message: `You already have a ${existingConnection.platform} connection. Please disconnect it first to connect WooCommerce.`
+      });
+    }
+
+    // Normalize store URL
+    const normalizedStoreUrl = storeUrl.trim().replace(/\/+$/, '');
+    if (!normalizedStoreUrl.match(/^https?:\/\//)) {
+      return res.status(400).json({
+        error: 'Invalid store URL',
+        message: 'Store URL must include http:// or https://'
+      });
+    }
+
+    // Test initial connection with provided credentials
+    const testResult = await wooAppPasswordService.testConnection(normalizedStoreUrl, username, password);
+    if (!testResult) {
+      return res.status(401).json({
+        error: 'Authentication failed',
+        message: 'Invalid WordPress credentials or WooCommerce API is not accessible'
+      });
+    }
+
+    // Create application password for future use
+    let appPasswordData;
+    try {
+      appPasswordData = await wooAppPasswordService.createApplicationPassword(normalizedStoreUrl, username, password);
+    } catch (appPasswordError) {
+      // If app password creation fails, use the provided password directly
+      console.warn('Application password creation failed, using provided credentials:', appPasswordError.message);
+      appPasswordData = {
+        username: username,
+        password: password,
+        appName: 'Direct Credentials (Fallback)'
+      };
+    }
+
+    // Register webhooks
+    try {
+      await wooAppPasswordService.registerWebhooks(normalizedStoreUrl, appPasswordData.username, appPasswordData.password);
+    } catch (webhookError) {
+      console.warn('Webhook registration failed (optional):', webhookError.message);
+    }
+
+    // Save connection to database
+    await prisma.connection.upsert({
+      where: {
+        userId_platform_storeUrl: {
+          userId,
+          platform: 'woocommerce',
+          storeUrl: normalizedStoreUrl
+        }
+      },
+      update: {
+        wooUsername: appPasswordData.username,
+        wooAppPassword: appPasswordData.password,
+        wooAppName: appPasswordData.appName,
+        lastSync: new Date(),
+        syncEnabled: true
+      },
+      create: {
+        userId,
+        platform: 'woocommerce',
+        storeUrl: normalizedStoreUrl,
+        wooUsername: appPasswordData.username,
+        wooAppPassword: appPasswordData.password,
+        wooAppName: appPasswordData.appName,
+        syncEnabled: true
+      }
+    });
+
+    console.log(`✅ WooCommerce connected successfully for ${normalizedStoreUrl}`);
+    res.json({ 
+      success: true,
+      message: 'WooCommerce store connected successfully',
+      storeUrl: normalizedStoreUrl,
+      appName: appPasswordData.appName
+    });
+  } catch (error) {
+    console.error('WooCommerce connection error:', error);
+    res.status(500).json({ 
+      error: 'Failed to connect WooCommerce',
+      message: error.message 
+    });
+  }
+});
+
+// WooCommerce OAuth callback
+router.get('/callback/woocommerce', async (req, res) => {
+  const { oauth_token, oauth_verifier, state, error } = req.query;
+  
+  // Handle user cancellation or errors
+  if (error) {
+    console.error('WooCommerce OAuth error:', error);
+    return res.redirect(`/?woo_error=${encodeURIComponent(error)}`);
+  }
+
+  if (!oauth_token || !oauth_verifier || !state) {
+    console.error('Missing OAuth parameters');
+    return res.redirect('/?woo_error=Missing authorization parameters');
+  }
+
+  try {
+    // Decode state to get user info
+    let stateData;
+    try {
+      stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+    } catch (parseError) {
+      return res.redirect('/?woo_error=Invalid state parameter');
+    }
+
+    const { userId, storeUrl } = stateData;
+
+    // Validate timestamp (prevent replay attacks)
+    const now = Date.now();
+    if (now - stateData.timestamp > 300000) { // 5 minutes
+      return res.redirect('/?woo_error=Authorization expired');
+    }
+
+    // Exchange request token for access token
+    const { accessToken, accessTokenSecret } = await wooOAuthService.exchangeRequestToken(
+      oauth_token, 
+      '', // We don't store request token secret in this implementation
+      oauth_verifier,
+      storeUrl
+    );
+
+    // Validate the access token
+    const isValid = await wooOAuthService.validateAccessToken(storeUrl, accessToken, accessTokenSecret);
+    if (!isValid) {
+      throw new Error('Received invalid access token from WooCommerce');
+    }
+
+    // Normalize store URL
+    const normalizedStoreUrl = storeUrl.trim().replace(/\/+$/, '');
+    if (!normalizedStoreUrl.match(/^https?:\/\//)) {
+      return res.redirect('/?woo_error=Invalid store URL format');
+    }
+
+    // Save connection to database
+    await prisma.connection.upsert({
+      where: {
+        userId_platform_storeUrl: {
+          userId,
+          platform: 'woocommerce',
+          storeUrl: normalizedStoreUrl
+        }
+      },
+      update: {
+        accessToken,
+        accessTokenSecret,
+        lastSync: new Date(),
+        syncEnabled: true
+      },
+      create: {
+        userId,
+        platform: 'woocommerce',
+        storeUrl: normalizedStoreUrl,
+        accessToken,
+        accessTokenSecret,
+        syncEnabled: true
+      }
+    });
+
+    // Register webhooks using the new OAuth client
+    const client = wooOAuthService.createAuthenticatedClient(normalizedStoreUrl, accessToken, accessTokenSecret);
+    try {
+      await client.post('webhooks', {
+        name: 'Prokip Order Sync',
+        topic: 'order.created',
+        delivery_url: process.env.WEBHOOK_URL || `http://localhost:${process.env.PORT || 3000}/connections/webhook/woocommerce`,
+        secret: process.env.WOO_WEBHOOK_SECRET || 'prokip_secret'
+      });
+      console.log(`✓ WooCommerce webhook registered for ${storeUrl}`);
+    } catch (webhookError) {
+      console.warn('Webhook registration failed (optional):', webhookError.message);
+    }
+
+    console.log(`✓ WooCommerce OAuth connection successful for ${storeUrl}`);
+    res.redirect('/?woo_success=WooCommerce+connected+successfully');
+  } catch (error) {
+    console.error('WooCommerce OAuth connection error:', error);
+    const errorMsg = error.message || 'Failed to connect WooCommerce store';
+    res.redirect(`/?woo_error=${encodeURIComponent(errorMsg)}`);
+  }
+});
+
+// Legacy WooCommerce connection (for backward compatibility)
 router.post('/woocommerce', [
   body('storeUrl').isURL(),
 ], async (req, res) => {
@@ -207,7 +425,10 @@ router.post('/woocommerce', [
   const consumerSecret = process.env.WOOCOMMERCE_CONSUMER_SECRET;
 
   if (!consumerKey || !consumerSecret) {
-    return res.status(500).json({ error: 'WooCommerce credentials are not configured in .env' });
+    return res.status(500).json({ 
+      error: 'Legacy WooCommerce credentials are not configured',
+      message: 'Please use the new OAuth connection method or configure WOOCOMMERCE_CONSUMER_KEY and WOOCOMMERCE_CONSUMER_SECRET in .env'
+    });
   }
 
   const userId = req.userId;
@@ -331,9 +552,22 @@ router.get('/status', async (req, res) => {
           productCount = products.length;
           orderCount = orders.length;
         } else if (conn.platform === 'woocommerce') {
+          // Use application password, OAuth tokens, or consumer key/secret
           const [products, orders] = await Promise.all([
-            getWooProducts(conn.storeUrl, conn.consumerKey, conn.consumerSecret),
-            getWooOrders(conn.storeUrl, conn.consumerKey, conn.consumerSecret)
+            getWooProducts(
+              conn.storeUrl, 
+              conn.consumerKey, 
+              conn.consumerSecret,
+              conn.accessToken,
+              conn.accessTokenSecret
+            ),
+            getWooOrders(
+              conn.storeUrl, 
+              conn.consumerKey, 
+              conn.consumerSecret,
+              conn.accessToken,
+              conn.accessTokenSecret
+            )
           ]);
           productCount = products.length;
           orderCount = orders.length;

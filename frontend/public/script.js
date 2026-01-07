@@ -8,6 +8,9 @@ let selectedConnectionId = null;
 let productMatchesData = null;
 let productReadinessData = null;
 
+// API Configuration
+const API_BASE_URL = 'http://localhost:3000';
+
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
   // Check if returning from OAuth callback
@@ -34,7 +37,7 @@ document.addEventListener('DOMContentLoaded', function() {
   showLogin();
 });
 
-// Handle OAuth callback from Shopify
+// Handle OAuth callback from both Shopify and WooCommerce
 function handleOAuthCallback() {
   const urlParams = new URLSearchParams(window.location.search);
   
@@ -62,6 +65,29 @@ function handleOAuthCallback() {
   if (urlParams.has('shopify_error')) {
     const error = urlParams.get('shopify_error');
     showNotification('error', `Shopify connection failed: ${error}`);
+    // Clean URL and ensure we're on home page
+    window.history.replaceState({}, document.title, '/');
+    // Make sure user stays on dashboard
+    if (token) {
+      navigateTo('home');
+    }
+  }
+  
+  // Check for WooCommerce success
+  if (urlParams.has('woo_success')) {
+    const success = urlParams.get('woo_success');
+    showNotification('success', decodeURIComponent(success));
+    // Clean URL
+    window.history.replaceState({}, document.title, '/');
+    // Refresh dashboard data
+    loadDashboardData();
+    loadConnectedStores();
+  }
+  
+  // Check for WooCommerce error
+  if (urlParams.has('woo_error')) {
+    const error = urlParams.get('woo_error');
+    showNotification('error', `WooCommerce connection failed: ${error}`);
     // Clean URL and ensure we're on home page
     window.history.replaceState({}, document.title, '/');
     // Make sure user stays on dashboard
@@ -173,24 +199,36 @@ async function prokipApiCall(endpoint, options = {}) {
 
 // Authentication functions
 async function login() {
+  console.log('🔐 Login attempt started...');
+  
   const username = document.getElementById('username').value;
   const password = document.getElementById('password').value;
+  
+  console.log('Username:', username);
+  console.log('Password provided:', password ? '✅ Yes' : '❌ No');
+  console.log('API_BASE_URL:', API_BASE_URL);
 
   if (!username || !password) {
+    console.log('❌ Missing username or password');
     document.getElementById('login-error').textContent = 'Please enter both username and password';
     return;
   }
 
   try {
+    console.log('🌐 Sending request to:', `${API_BASE_URL}/auth/login`);
+    
     const res = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
 
+    console.log('📡 Response status:', res.status);
     const data = await res.json();
+    console.log('📦 Response data:', data);
 
     if (res.ok) {
+      console.log('✅ Login successful!');
       token = data.token;
       currentUser = { username };
       localStorage.setItem('authToken', token);
@@ -199,9 +237,11 @@ async function login() {
       // Just load business locations after successful login
       await loadBusinessLocations();
     } else {
+      console.log('❌ Login failed:', data.error);
       document.getElementById('login-error').textContent = data.error || 'Login failed';
     }
   } catch (error) {
+    console.error('❌ Network error:', error);
     document.getElementById('login-error').textContent = 'Network error. Please try again.';
   }
 }
@@ -426,8 +466,10 @@ async function initiateShopifyConnection() {
 
 async function connectWooCommerceStore() {
   const storeUrl = document.getElementById('woo-store-url').value.trim();
+  const username = document.getElementById('woo-username').value.trim();
+  const password = document.getElementById('woo-password').value.trim();
 
-  if (!storeUrl || !consumerKey || !consumerSecret) {
+  if (!storeUrl || !username || !password) {
     showNotification('error', 'Please fill in all WooCommerce connection details');
     return;
   }
@@ -439,15 +481,16 @@ async function connectWooCommerceStore() {
     <div style="text-align: center; padding: 40px;">
       <div class="loading-spinner"></div>
       <h3 style="margin-top: 20px; color: var(--gray-700);">Connecting to WooCommerce...</h3>
-      <p style="color: var(--gray-500);">Verifying store credentials...</p>
+      <p style="color: var(--gray-500);">Testing connection and setting up secure access...</p>
     </div>
   `;
 
   try {
-    await apiCall('/connections/woocommerce', 'POST', {
+    // Connect using simplified application password flow
+    const response = await apiCall('/connections/woocommerce/connect', 'POST', {
       storeUrl,
-      consumerKey,
-      consumerSecret
+      username,
+      password
     });
 
     showNotification('success', 'WooCommerce store connected successfully!');
@@ -457,6 +500,9 @@ async function connectWooCommerceStore() {
   } catch (error) {
     console.error('WooCommerce connection error:', error);
     showNotification('error', 'Failed to connect WooCommerce store: ' + (error.message || 'Unknown error'));
+    
+    // Restore modal content
+    modal.querySelector('.modal-body').innerHTML = originalContent;
   }
 }
 

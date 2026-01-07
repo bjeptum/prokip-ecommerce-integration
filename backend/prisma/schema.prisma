@@ -22,18 +22,22 @@ model User {
 }
 
 model Connection {
-  id             Int              @id @default(autoincrement())
-  platform       String
-  storeUrl       String
-  accessToken    String?
-  consumerKey    String?
-  consumerSecret String?
-  lastSync       DateTime?
-  syncEnabled    Boolean          @default(true)
-  userId         Int?
-  User           User?            @relation(fields: [userId], references: [id])
-  InventoryCache InventoryCache[]
-  SalesLog       SalesLog[]
+  id               Int              @id @default(autoincrement())
+  platform         String
+  storeUrl         String
+  accessToken      String?          // OAuth access token
+  accessTokenSecret String?          // OAuth access token secret
+  consumerKey      String?          // Legacy consumer key
+  consumerSecret   String?          // Legacy consumer secret
+  wooUsername      String?          // WordPress username for app password
+  wooAppPassword   String?          // WordPress application password
+  wooAppName       String?          // Application password name
+  lastSync         DateTime?
+  syncEnabled      Boolean          @default(true)
+  userId           Int?
+  User             User?            @relation(fields: [userId], references: [id])
+  InventoryCache   InventoryCache[]
+  SalesLog         SalesLog[]
 
   @@unique([platform, storeUrl])
   @@unique([userId, platform, storeUrl])
