@@ -148,7 +148,9 @@ router.get('/:id/products', async (req, res) => {
 router.get('/:id/orders', async (req, res) => {
   try {
     const connectionId = parseInt(req.params.id);
-    const userId = req.user.id;
+    console.log('🔍 Orders route - req.userId:', req.userId);
+    console.log('🔍 Orders route - req.user:', req.user);
+    const userId = req.userId; // Fixed: use req.userId instead of req.user.id
 
     // Verify connection belongs to user
     const connection = await prisma.connection.findFirst({

@@ -1265,14 +1265,10 @@ async function loadStoreOrders() {
 
   try {
     // Fetch orders directly from the store
-    const res = await apiCall(`/stores/${selectedStore.id}/orders`);
-    if (res.ok) {
-      const orders = await res.json();
-      displayOrders(orders);
-    } else {
-      content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">Failed to load orders</p>';
-    }
+    const orders = await apiCall(`/stores/${selectedStore.id}/orders`);
+    displayOrders(orders);
   } catch (error) {
+    console.error('Failed to load orders:', error);
     content.innerHTML = '<p style="text-align: center; color: var(--gray-500);">Error loading orders</p>';
   }
 }
