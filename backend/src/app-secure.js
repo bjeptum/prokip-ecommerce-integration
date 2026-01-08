@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
-const bcrypt = require('bcryptjs');
 const authRoutes = require('./routes/authRoutes');
 const connectionRoutes = require('./routes/connectionRoutes');
 const wooConnectionRoutes = require('./routes/wooConnectionRoutes');
@@ -11,21 +10,6 @@ const webhookRoutes = require('./routes/webhookRoutes');
 
 const app = express();
 const prisma = new PrismaClient();
-
-// Ensure there is at least one admin user to allow login.
-async function ensureDefaultUser() {
-  const username = process.env.DEFAULT_ADMIN_USER;
-  const password = process.env.DEFAULT_ADMIN_PASS;
-
-  if (!username || !password) return; // user will have to register manually
-
-  const existing = await prisma.user.findUnique({ where: { username } });
-  if (existing) return;
-
-  const hashed = await bcrypt.hash(password, 10);
-  await prisma.user.create({ data: { username, password: hashed } });
-  console.log(`Default admin user '${username}' created from env DEFAULT_ADMIN_USER/DEFAULT_ADMIN_PASS`);
-}
 
 // Middleware
 app.use(cors());
@@ -56,11 +40,22 @@ app.use('/sync', syncRoutes);
 app.use('/webhooks', webhookRoutes);
 
 // Serve static files (for frontend)
-app.use(express.static('../frontend/public'));
+app.use(express.static('public'));
 
-// Default route - serve frontend
+// Default route
 app.get('/', (req, res) => {
-  res.sendFile(require('path').join(__dirname, '../frontend/public/index.html'));
+  res.json({ 
+    message: 'Prokip E-commerce Integration API v2.0 (Secure)',
+    version: '2.0.0-secure',
+    endpoints: {
+      auth: '/auth',
+      connections: '/connections',
+      wooConnections: '/woo-connections',
+      stores: '/stores',
+      sync: '/sync',
+      webhooks: '/webhooks'
+    }
+  });
 });
 
 // Error handling middleware
@@ -105,17 +100,30 @@ async function startServer() {
   try {
     // Test database connection
     await prisma.$connect();
-    console.log('✅ Database connected');
-    
-    // Ensure default admin user exists
-    await ensureDefaultUser();
+    console.log('✅ Database connected successfully');
     
     // Start server
     app.listen(PORT, () => {
-      console.log(`🚀 Server running on http://localhost:${PORT}`);
+      console.log(`🚀 Prokip Backend Server v2.0 (Secure) running on http://localhost:${PORT}`);
+      console.log('📚 API Documentation:');
+      console.log('   POST /woo-connections/test - Test WooCommerce connection');
+      console.log('   POST /woo-connections/connect - Connect WooCommerce store');
+      console.log('   GET  /woo-connections/connections - Get user connections');
+      console.log('   PUT  /woo-connections/connections/:id - Update connection');
+      console.log('   DELETE /woo-connections/connections/:id - Delete connection');
+      console.log('   GET  /woo-connections/connections/:id/status - Check connection status');
+      console.log('   GET  /stores/:id/products - Get store products (secure)');
+      console.log('   GET  /stores/:id/orders - Get store orders (secure)');
+      console.log('');
+      console.log('🔐 Security Features:');
+      console.log('   ✅ Encrypted Consumer Key/Secret storage');
+      console.log('   ✅ Multi-user authentication');
+      console.log('   ✅ Secure API endpoints');
+      console.log('   ✅ No sensitive data in frontend');
+      console.log('   ✅ Proper error handling');
     });
   } catch (error) {
-    console.error('❌ Failed to start server:', error.message);
+    console.error('❌ Failed to start server:', error);
     process.exit(1);
   }
 }

@@ -579,6 +579,35 @@ function showWooConnectionStatus(type, message, details = null, suggestions = nu
   
   statusDiv.innerHTML = html;
 }
+      const errorData = error.response.data;
+      errorMessage = errorData.error || errorMessage;
+      
+      if (errorData.details) {
+        errorDetails = `\n📋 Error Details:\n` +
+          `Store URL: ${errorData.details.storeUrl || 'N/A'}\n` +
+          `Username: ${errorData.details.username || 'N/A'}\n` +
+          `Step: ${errorData.details.step || 'N/A'}\n` +
+          `Message: ${errorData.message || 'N/A'}`;
+      } else if (errorData.message) {
+        errorDetails = `\n💬 Message: ${errorData.message}`;
+      }
+    } else if (error.message) {
+      errorMessage = error.message;
+      errorDetails = `\n💬 Message: ${error.message}`;
+    }
+    
+    // Show error notification but keep user logged in
+    showNotification('error', errorMessage + errorDetails);
+    
+    // Restore modal content so user can try again
+    modal.querySelector('.modal-body').innerHTML = originalContent;
+    
+    // Clear form fields for retry
+    document.getElementById('woo-store-url').value = '';
+    document.getElementById('woo-username').value = '';
+    document.getElementById('woo-password').value = '';
+  }
+}
 
 // Dashboard data loading
 async function loadDashboardData() {
@@ -1461,139 +1490,6 @@ async function syncStoreOrders() {
     console.error('Order sync error:', error);
     showNotification('error', 'Error syncing orders');
   }
-}
-
-// Sales Functions
-async function syncStoreSales() {
-  console.log('syncStoreSales called, selectedStore:', selectedStore);
-  if (!selectedStore) {
-    showNotification('error', 'Please select a store first');
-    return;
-  }
-
-  if (selectedStore.platform === 'shopify') {
-    showNotification('info', 'Shopify sales are synced automatically via webhooks');
-    return;
-  }
-
-  const confirmed = confirm('Pull sales from your WooCommerce store?\n\nThis will fetch recent sales and sync them to Prokip.');
-  if (!confirmed) return;
-
-  try {
-    showNotification('info', 'Pulling sales from store...');
-    const data = await apiCall('/sync/pull-sales', 'POST', {
-      connectionId: selectedStore.id
-    });
-    showNotification('success', data.message || 'Sales synced successfully');
-    setTimeout(() => loadStoreSales(), 2000);
-  } catch (error) {
-    console.error('Sales sync error:', error);
-    showNotification('error', 'Error syncing sales');
-  }
-}
-
-async function loadStoreSales() {
-  if (!selectedStore) {
-    document.getElementById('sales-list').innerHTML = '<p class="text-muted">Please select a store first</p>';
-    return;
-  }
-
-  try {
-    showNotification('info', 'Loading sales...');
-    const sales = await apiCall(`/stores/${selectedStore.id}/sales`);
-    
-    displayStoreSales(sales);
-    updateSalesStats(sales);
-  } catch (error) {
-    console.error('Failed to load sales:', error);
-    showNotification('error', 'Failed to load sales');
-  }
-}
-
-function displayStoreSales(sales) {
-  const salesList = document.getElementById('sales-list');
-  
-  if (!sales || sales.length === 0) {
-    salesList.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-cash-register"></i>
-        <h3>No Sales Found</h3>
-        <p>No sales have been synced yet. Click "Sync Sales" to fetch sales from your store.</p>
-      </div>
-    `;
-    return;
-  }
-
-  salesList.innerHTML = `
-    <div class="table-responsive">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Order ID</th>
-            <th>Date</th>
-            <th>Customer</th>
-            <th>Products</th>
-            <th>Total</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${sales.map(sale => `
-            <tr>
-              <td><code>${sale.orderId || sale.id}</code></td>
-              <td>${new Date(sale.date).toLocaleDateString()}</td>
-              <td>${sale.customer || 'Guest'}</td>
-              <td>${sale.productCount || 0} items</td>
-              <td>$${(sale.total || 0).toFixed(2)}</td>
-              <td>
-                <span class="badge ${getStatusClass(sale.status)}">
-                  ${sale.status || 'completed'}
-                </span>
-              </td>
-              <td>
-                <button onclick="viewSaleDetails('${sale.id}')" class="btn-small btn-primary">
-                  <i class="fas fa-eye"></i> View
-                </button>
-              </td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-function updateSalesStats(sales) {
-  const totalSales = sales.reduce((sum, sale) => sum + (sale.total || 0), 0);
-  const salesCount = sales.length;
-  const lastSync = sales.length > 0 
-    ? new Date(Math.max(...sales.map(s => new Date(sale.date)))).toLocaleString()
-    : 'Never';
-
-  document.getElementById('total-sales').textContent = `$${totalSales.toFixed(2)}`;
-  document.getElementById('sales-count').textContent = salesCount;
-  document.getElementById('last-sync').textContent = lastSync;
-}
-
-function getStatusClass(status) {
-  switch (status?.toLowerCase()) {
-    case 'completed': return 'badge-success';
-    case 'processing': return 'badge-warning';
-    case 'pending': return 'badge-info';
-    case 'cancelled': return 'badge-danger';
-    default: return 'badge-secondary';
-  }
-}
-
-function viewSaleDetails(saleId) {
-  // TODO: Implement sale details modal
-  showNotification('info', `Viewing details for sale ${saleId}`);
-}
-
-function showSalesSettings() {
-  // TODO: Implement sales settings modal
-  showNotification('info', 'Sales settings coming soon');
 }
 
 // Prokip Operations Functions

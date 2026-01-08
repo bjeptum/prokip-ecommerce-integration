@@ -90,6 +90,10 @@
             <i class="fas fa-shopping-cart"></i>
             <span>Orders</span>
           </li>
+          <li class="menu-item" data-page="store-sales" onclick="navigateTo('store-sales')">
+            <i class="fas fa-cash-register"></i>
+            <span>Sales</span>
+          </li>
           <li class="menu-item" data-page="store-analytics" onclick="navigateTo('store-analytics')">
             <i class="fas fa-chart-bar"></i>
             <span>Analytics</span>
@@ -326,18 +330,70 @@
       </div>
 
       <!-- Store Orders Page -->
-      <div id=\"store-orders-page\" class=\"page\">
-        <div class=\"page-header\">
+      <div id="store-orders-page" class="page">
+        <div class="page-header">
           <h1>Orders</h1>
-          <p id=\"store-orders-subtitle\">Manage orders for the selected store</p>
-          <div class=\"page-actions\">
-            <button onclick=\"syncStoreOrders()\" class=\"btn-primary\">
-              <i class=\"fas fa-sync\"></i> Sync Orders
+          <p id="store-orders-subtitle">Manage orders for the selected store</p>
+          <div class="page-actions">
+            <button onclick="syncStoreOrders()" class="btn-primary">
+              <i class="fas fa-sync"></i> Sync Orders
             </button>
           </div>
         </div>
-        <div class=\"orders-content\" id=\"orders-content\">
+        <div class="orders-content" id="orders-content">
           <!-- Orders will be loaded here -->
+        </div>
+      </div>
+
+      <!-- Store Sales Page -->
+      <div id="store-sales-page" class="page">
+        <div class="page-header">
+          <h1>Sales</h1>
+          <p id="store-sales-subtitle">Sync sales from the selected store</p>
+          <div class="page-actions">
+            <button onclick="syncStoreSales()" class="btn-primary">
+              <i class="fas fa-sync"></i> Sync Sales
+            </button>
+            <button onclick="showSalesSettings()" class="btn-secondary">
+              <i class="fas fa-cog"></i> Settings
+            </button>
+          </div>
+        </div>
+        <div class="sales-content" id="sales-content">
+          <div class="sales-overview">
+            <div class="sales-stats-grid">
+              <div class="sales-stat-card">
+                <div class="stat-icon">
+                  <i class="fas fa-dollar-sign"></i>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-number" id="total-sales">0</div>
+                  <div class="stat-label">Total Sales</div>
+                </div>
+              </div>
+              <div class="sales-stat-card">
+                <div class="stat-icon">
+                  <i class="fas fa-shopping-cart"></i>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-number" id="sales-count">0</div>
+                  <div class="stat-label">Sales Count</div>
+                </div>
+              </div>
+              <div class="sales-stat-card">
+                <div class="stat-icon">
+                  <i class="fas fa-calendar"></i>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-number" id="last-sync">Never</div>
+                  <div class="stat-label">Last Sync</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="sales-list" id="sales-list">
+            <!-- Sales will be loaded here -->
+          </div>
         </div>
       </div>
 
@@ -484,30 +540,43 @@
           <div class="modal-body">
             <div class="connection-instructions">
               <h3>Connect Your WooCommerce Store</h3>
-              <p>Enter your store URL and WordPress admin credentials. We'll create a secure application password for ongoing access.</p>
+              <p>Enter your store URL and WooCommerce Consumer Key/Secret for secure API access.</p>
             </div>
 
             <div class="form-group">
-              <label for="woo-store-url">Store URL</label>
-              <input type="text" id="woo-store-url" placeholder="https://mystore.com" />
-              <small class="form-help">Full URL including https://</small>
+              <label for="woo-store-url">Store URL *</label>
+              <input type="url" id="woo-store-url" placeholder="https://yourstore.com" />
+              <small class="form-help">Your WooCommerce store URL (include https://)</small>
             </div>
 
             <div class="form-group">
-              <label for="woo-username">WordPress Username</label>
-              <input type="text" id="woo-username" placeholder="admin" />
-              <small class="form-help">WordPress admin username</small>
+              <label for="woo-consumer-key">Consumer Key *</label>
+              <input type="text" id="woo-consumer-key" placeholder="ck_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+              <small class="form-help">Found in WooCommerce → Settings → Advanced → REST API</small>
             </div>
 
             <div class="form-group">
-              <label for="woo-password">WordPress Password</label>
-              <input type="password" id="woo-password" placeholder="Your WordPress password" />
-              <small class="form-help">Used only once to create secure application password</small>
+              <label for="woo-consumer-secret">Consumer Secret *</label>
+              <input type="password" id="woo-consumer-secret" placeholder="cs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+              <small class="form-help">Keep this secret - it's like a password</small>
             </div>
 
-            <button onclick="connectWooCommerceStore()" class="btn-primary">
-              <i class="fas fa-shopping-cart"></i> Connect Store
-            </button>
+            <div class="form-group">
+              <label for="woo-store-name">Store Name (Optional)</label>
+              <input type="text" id="woo-store-name" placeholder="My Store" />
+              <small class="form-help">A friendly name to identify your store</small>
+            </div>
+
+            <div class="connection-buttons">
+              <button onclick="testWooCommerceConnection()" class="btn-secondary" id="test-woo-btn">
+                <i class="fas fa-check-circle"></i> Test Connection
+              </button>
+              <button onclick="connectWooCommerceStore()" class="btn-primary" id="connect-woo-btn">
+                <i class="fas fa-shopping-cart"></i> Connect Store
+              </button>
+            </div>
+
+            <div id="woo-connection-status" class="connection-status" style="display: none;"></div>
           </div>
         </div>
       </div>

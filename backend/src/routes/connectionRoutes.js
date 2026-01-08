@@ -241,26 +241,65 @@ router.post('/woocommerce/connect', [
     }
 
     // Test initial connection with provided credentials
+    console.log('🔍 Testing initial WooCommerce connection...');
+    console.log('Store URL:', normalizedStoreUrl);
+    console.log('Username:', username);
+    
     const testResult = await wooAppPasswordService.testConnection(normalizedStoreUrl, username, password);
     if (!testResult) {
+      console.error('❌ Initial connection test failed');
+      
+      // Provide detailed error information for troubleshooting
+      const errorDetails = {
+        storeUrl: normalizedStoreUrl,
+        username: username,
+        step: 'initial_test',
+        troubleshooting: [
+          '1. Verify your WordPress admin credentials work in WordPress admin',
+          '2. Ensure WooCommerce REST API is enabled (WooCommerce → Settings → Advanced → Legacy API)',
+          '3. Check if Application Passwords are allowed (WordPress 5.6+)',
+          '4. Verify your store URL is correct and accessible',
+          '5. Check if security plugins are blocking API access',
+          '6. Ensure your user has Administrator role',
+          '7. Try temporarily disabling security plugins to test'
+        ],
+        commonIssues: [
+          'Wrong WordPress username/password',
+          'WooCommerce REST API disabled',
+          'Security plugin blocking requests',
+          'Invalid store URL',
+          'Insufficient user permissions'
+        ]
+      };
+      
       return res.status(401).json({
         error: 'Authentication failed',
-        message: 'Invalid WordPress credentials or WooCommerce API is not accessible'
+        message: 'Unable to connect to WooCommerce. Please verify your credentials and store configuration.',
+        details: errorDetails
       });
     }
+    console.log('✅ Initial connection test passed');
 
     // Create application password for future use
     let appPasswordData;
     try {
+      console.log('🔐 Creating application password...');
       appPasswordData = await wooAppPasswordService.createApplicationPassword(normalizedStoreUrl, username, password);
+      console.log('✅ Application password created successfully');
+      console.log('Method:', appPasswordData.method);
+      console.log('App Name:', appPasswordData.appName);
     } catch (appPasswordError) {
-      // If app password creation fails, use the provided password directly
-      console.warn('Application password creation failed, using provided credentials:', appPasswordError.message);
+      console.error('❌ Application password creation failed:', appPasswordError.message);
+      
+      // Use direct credentials as fallback
       appPasswordData = {
         username: username,
         password: password,
-        appName: 'Direct Credentials (Fallback)'
+        appName: 'Direct Credentials (Fallback)',
+        created: new Date().toISOString(),
+        method: 'direct_fallback'
       };
+      console.log('⚠️  Using direct credentials as fallback');
     }
 
     // Register webhooks

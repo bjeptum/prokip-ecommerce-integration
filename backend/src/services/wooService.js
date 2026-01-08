@@ -107,9 +107,9 @@ async function registerWooWebhooks(storeUrl, consumerKey = null, consumerSecret 
 
 /**
  * Fetch products
- * Supports both OAuth and Basic Auth
+ * Supports OAuth, Basic Auth, and Application Password
  */
-async function getWooProducts(storeUrl, consumerKey = null, consumerSecret = null, accessToken = null, accessTokenSecret = null) {
+async function getWooProducts(storeUrl, consumerKey = null, consumerSecret = null, accessToken = null, accessTokenSecret = null, username = null, appPassword = null) {
   let client;
   
   try {
@@ -117,8 +117,12 @@ async function getWooProducts(storeUrl, consumerKey = null, consumerSecret = nul
       // Use OAuth client
       const wooOAuthService = require('./wooOAuthService');
       client = wooOAuthService.createAuthenticatedClient(storeUrl, accessToken, accessTokenSecret);
+    } else if (username && appPassword) {
+      // Use Application Password client
+      const wooAppPasswordService = require('./wooAppPasswordService');
+      client = wooAppPasswordService.createAuthenticatedClient(storeUrl, username, appPassword);
     } else {
-      // Use Basic Auth client
+      // Use Basic Auth client (Consumer Key/Secret)
       client = getWooClient(storeUrl, consumerKey, consumerSecret);
     }
     
