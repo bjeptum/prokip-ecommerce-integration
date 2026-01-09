@@ -8,6 +8,7 @@ const wooConnectionRoutes = require('./routes/wooConnectionRoutes');
 const storeRoutes = require('./routes/storeRoutesSecure');
 const syncRoutes = require('./routes/syncRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
+const setupRoutes = require('./routes/setupRoutes');
 
 const app = express();
 const prisma = new PrismaClient();
@@ -54,6 +55,7 @@ app.use('/woo-connections', wooConnectionRoutes);
 app.use('/stores', storeRoutes);
 app.use('/sync', syncRoutes);
 app.use('/webhooks', webhookRoutes);
+app.use('/setup', setupRoutes);
 
 // Serve static files (for frontend)
 app.use(express.static('../frontend/public'));
