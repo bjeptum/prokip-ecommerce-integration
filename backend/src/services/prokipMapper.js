@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
+const prokipService = require('./prokipService');
 
 const prisma = new PrismaClient();
 const MOCK_PROKIP = process.env.MOCK_PROKIP === 'true';
@@ -8,16 +9,23 @@ const PROKIP_BASE = MOCK_PROKIP
   : process.env.PROKIP_API + '/connector/api/';
 
 async function getProkipProductIdBySku(sku) {
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
-  if (!prokip) return null;
-
-  const headers = { Authorization: `Bearer ${prokip.token}`, Accept: 'application/json' };
-
   try {
-    const response = await axios.get(`${PROKIP_BASE}product?sku=${sku}&per_page=-1`, { headers });
+    if (!MOCK_PROKIP) {
+      // Use prokipService for real API
+      const product = await prokipService.getProductBySku(sku);
+      return product?.id || null;
+    }
+    
+    // Mock mode - use direct API call
+    const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    if (!prokip) return null;
+
+    const headers = { Authorization: `Bearer ${prokip.token}`, Accept: 'application/json' };
+    const response = await axios.get(`${PROKIP_BASE}product?sku=${encodeURIComponent(sku)}&per_page=-1`, { headers });
     const product = response.data.data.find(p => p.sku === sku);
     return product ? product.id : null;
   } catch (error) {
+    console.error(`Failed to get Prokip product ID for SKU ${sku}:`, error.message);
     return null;
   }
 }

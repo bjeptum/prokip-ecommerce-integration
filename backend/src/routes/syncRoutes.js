@@ -19,31 +19,26 @@ router.get('/status', async (req, res) => {
   let prokipStats = { products: 0, sales: 0, purchases: 0 };
 
   try {
-    // Check if inventoryCache table exists
-    if (prisma.inventoryCache) {
-      const prokipProducts = await prisma.inventoryCache.groupBy({
-        by: ['sku'],
-        _count: { sku: true }
-      });
-      prokipStats.products = prokipProducts.length;
-    }
+    // Get unique product count from inventory logs
+    const prokipProducts = await prisma.inventoryLog.groupBy({
+      by: ['sku'],
+      _count: { sku: true }
+    });
+    prokipStats.products = prokipProducts.length;
 
-    // Check if salesLog table exists
-    if (prisma.salesLog) {
-      const salesCount = await prisma.salesLog.count({
-        where: { 
-          status: 'completed'
+    // Get sales count - count all completed/paid orders
+    const salesCount = await prisma.salesLog.count({
+      where: { 
+        status: {
+          in: ['completed', 'paid', 'processing']
         }
-      });
-      const purchasesCount = await prisma.salesLog.count({
-        where: {
-          status: 'purchase'
-        }
-      });
+      }
+    });
 
-      prokipStats.sales = salesCount;
-      prokipStats.purchases = purchasesCount;
-    }
+    // For purchases, we can count webhook events or use a different approach
+    // Since we don't have a separate purchase tracking, set to 0 or same as sales
+    prokipStats.sales = salesCount;
+    prokipStats.purchases = 0; // Not tracked separately in current schema
   } catch (error) {
     console.error('Error fetching Prokip stats:', error);
   }
@@ -54,11 +49,9 @@ router.get('/status', async (req, res) => {
 
     // Get product count for this connection
     try {
-      if (prisma.inventoryCache) {
-        productCount = await prisma.inventoryCache.count({
-          where: { connectionId: c.id }
-        });
-      }
+      productCount = await prisma.inventoryLog.count({
+        where: { connectionId: c.id }
+      });
     } catch (error) {
       // Table doesn't exist or other error
       productCount = 0;
@@ -66,14 +59,14 @@ router.get('/status', async (req, res) => {
 
     // Get order count from SalesLog for this connection
     try {
-      if (prisma.salesLog) {
-        orderCount = await prisma.salesLog.count({
-          where: {
-            connectionId: c.id,
-            status: 'completed'
+      orderCount = await prisma.salesLog.count({
+        where: {
+          connectionId: c.id,
+          status: {
+            in: ['completed', 'paid', 'processing']
           }
-        });
-      }
+        }
+      });
     } catch (error) {
       // Table doesn't exist or other error
       orderCount = 0;
@@ -83,6 +76,7 @@ router.get('/status', async (req, res) => {
       id: c.id,
       platform: c.platform,
       storeUrl: c.storeUrl,
+      storeName: c.storeName,
       lastSync: c.lastSync,
       syncEnabled: c.syncEnabled || true,
       productCount,
@@ -199,8 +193,7 @@ router.post('/pull-sales', async (req, res) => {
     // Verify connection belongs to user
     const connection = await prisma.connection.findFirst({
       where: {
-        id: connectionId,
-        userId: userId
+        id: parseInt(connectionId)
       }
     });
 
@@ -228,6 +221,98 @@ router.post('/pull-sales', async (req, res) => {
     res.status(500).json({ 
       error: 'Failed to pull sales',
       message: 'An unexpected error occurred while pulling sales'
+    });
+  }
+});
+
+// Sync inventory and prices from Prokip to connected store
+router.post('/inventory', async (req, res) => {
+  const { connectionId } = req.body;
+  
+  if (!connectionId) {
+    return res.status(400).json({ error: 'Connection ID is required' });
+  }
+  
+  try {
+    const connection = await prisma.connection.findUnique({
+      where: { id: parseInt(connectionId) }
+    });
+    
+    if (!connection) {
+      return res.status(404).json({ error: 'Connection not found' });
+    }
+    
+    // Get Prokip products
+    const prokipService = require('../services/prokipService');
+    const inventory = await prokipService.getInventory();
+    const products = await prokipService.getProducts();
+    
+    const { updateInventoryInStore } = require('../services/storeService');
+    const results = [];
+    
+    for (const product of products) {
+      const sku = product.sku;
+      if (!sku) continue;
+      
+      // Find stock for this product
+      const stockItem = inventory.find(i => i.sku === sku);
+      const quantity = stockItem?.stock || stockItem?.qty_available || 
+                       product.product_variations?.[0]?.variations?.[0]?.variation_location_details?.[0]?.qty_available || 0;
+      const price = product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0;
+      
+      try {
+        await updateInventoryInStore(connection, sku, parseInt(quantity));
+        
+        // Update inventory log
+        await prisma.inventoryLog.upsert({
+          where: {
+            connectionId_sku: {
+              connectionId: connection.id,
+              sku
+            }
+          },
+          create: {
+            connectionId: connection.id,
+            productId: product.id?.toString() || sku,
+            productName: product.name,
+            sku,
+            quantity: parseInt(quantity),
+            price: parseFloat(price)
+          },
+          update: {
+            quantity: parseInt(quantity),
+            price: parseFloat(price),
+            lastSynced: new Date()
+          }
+        });
+        
+        results.push({ sku, status: 'success', quantity, price });
+      } catch (error) {
+        console.error(`Failed to sync inventory for SKU ${sku}:`, error.message);
+        results.push({ sku, status: 'error', error: error.message });
+      }
+    }
+    
+    // Update connection last sync time
+    await prisma.connection.update({
+      where: { id: connection.id },
+      data: { lastSync: new Date() }
+    });
+    
+    const successCount = results.filter(r => r.status === 'success').length;
+    const errorCount = results.filter(r => r.status === 'error').length;
+    
+    res.json({
+      success: true,
+      message: `Inventory sync complete: ${successCount} synced, ${errorCount} errors`,
+      results
+    });
+    
+  } catch (error) {
+    console.error('Inventory sync failed:', error);
+    res.status(500).json({
+      error: 'Inventory sync failed',
+      details: error.message
     });
   }
 });

@@ -184,11 +184,23 @@ router.get('/:id/orders', async (req, res) => {
         }));
       } catch (error) {
         console.error('Shopify orders fetch failed:', error);
-        return res.status(401).json({ 
-          error: 'Shopify authentication failed',
-          message: 'Please reconnect your Shopify store. The access token may have expired or been revoked.',
-          reconnect: true,
-          connectionId: connectionId
+        console.error('Error details:', error.response?.data || error.message);
+        
+        // Check if it's an authentication error
+        if (error.response?.status === 401 || error.message?.includes('Invalid API key') || error.message?.includes('access token')) {
+          return res.status(401).json({ 
+            error: 'Shopify authentication failed',
+            message: 'Please reconnect your Shopify store. The access token may have expired or been revoked.',
+            reconnect: true,
+            connectionId: connectionId
+          });
+        }
+        
+        // For other errors, return the actual error
+        return res.status(500).json({ 
+          error: 'Failed to fetch orders',
+          message: error.response?.data?.errors || error.message || 'Unknown error occurred',
+          details: error.response?.data
         });
       }
     } else if (connection.platform === 'woocommerce') {

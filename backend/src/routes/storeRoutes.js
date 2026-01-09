@@ -317,4 +317,57 @@ router.get('/:id/analytics', async (req, res) => {
   }
 });
 
+// Get sales for a specific store (returns orders as sales)
+router.get('/:id/sales', async (req, res) => {
+  try {
+    const connectionId = parseInt(req.params.id);
+    const connection = await prisma.connection.findUnique({
+      where: { id: connectionId }
+    });
+
+    if (!connection) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+
+    let sales = [];
+    
+    if (connection.platform === 'shopify') {
+      const rawOrders = await getShopifyOrders(connection.storeUrl, connection.accessToken);
+      // Filter only completed/paid orders
+      const paidOrders = rawOrders.filter(o => ['paid', 'partially_paid'].includes(o.financial_status));
+      sales = paidOrders.map(o => ({
+        id: o.id,
+        orderId: o.order_number || o.id,
+        customer: `${o.customer?.first_name || ''} ${o.customer?.last_name || ''}`.trim() || 'Guest',
+        date: o.created_at,
+        productCount: o.line_items?.length || 0,
+        quantitySold: o.line_items?.reduce((sum, item) => sum + item.quantity, 0) || 0,
+        total: parseFloat(o.total_price || 0),
+        status: o.financial_status || 'paid',
+        source: 'store'
+      }));
+    } else if (connection.platform === 'woocommerce') {
+      const rawOrders = await getWooOrders(connection.storeUrl, connection.consumerKey, connection.consumerSecret);
+      // Filter only completed/processing orders
+      const completedOrders = rawOrders.filter(o => ['completed', 'processing'].includes(o.status));
+      sales = completedOrders.map(o => ({
+        id: o.id,
+        orderId: o.number || o.id,
+        customer: `${o.billing?.first_name || ''} ${o.billing?.last_name || ''}`.trim() || 'Guest',
+        date: o.date_created,
+        productCount: o.line_items?.length || 0,
+        quantitySold: o.line_items?.reduce((sum, item) => sum + item.quantity, 0) || 0,
+        total: parseFloat(o.total || 0),
+        status: o.status || 'completed',
+        source: 'store'
+      }));
+    }
+
+    res.json(sales);
+  } catch (error) {
+    console.error('Error fetching store sales:', error);
+    res.status(500).json({ error: 'Failed to fetch sales' });
+  }
+});
+
 module.exports = router;

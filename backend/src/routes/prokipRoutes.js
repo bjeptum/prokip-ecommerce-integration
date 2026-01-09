@@ -3,6 +3,7 @@ const axios = require('axios');
 const { body, validationResult } = require('express-validator');
 const { PrismaClient } = require('@prisma/client');
 const { createProductInStore, updateInventoryInStore } = require('../services/storeService');
+const prokipService = require('../services/prokipService');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -10,6 +11,73 @@ const MOCK_PROKIP = process.env.MOCK_PROKIP === 'true';
 const PROKIP_BASE = MOCK_PROKIP 
   ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'
   : process.env.PROKIP_API + '/connector/api/';
+
+/**
+ * Helper to get Prokip headers (handles real vs mock API)
+ */
+async function getHeaders() {
+  if (!MOCK_PROKIP) {
+    return await prokipService.getAuthHeaders();
+  }
+  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+  return {
+    Authorization: `Bearer ${prokip?.token}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json'
+  };
+}
+
+/**
+ * Get products from Prokip
+ */
+router.get('/products', async (req, res) => {
+  try {
+    let products;
+    
+    if (!MOCK_PROKIP) {
+      // Use prokipService for real API
+      products = await prokipService.getProducts();
+    } else {
+      const headers = await getHeaders();
+      const response = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
+      products = response.data.data || [];
+    }
+    
+    res.json({ success: true, products });
+  } catch (error) {
+    console.error('Failed to fetch products:', error.message);
+    res.status(500).json({ 
+      error: 'Could not load products from Prokip',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Get inventory/stock from Prokip
+ */
+router.get('/inventory', async (req, res) => {
+  try {
+    let inventory;
+    
+    if (!MOCK_PROKIP) {
+      // Use prokipService for real API
+      inventory = await prokipService.getInventory();
+    } else {
+      const headers = await getHeaders();
+      const response = await axios.get(PROKIP_BASE + 'product-stock-report', { headers });
+      inventory = response.data.data || response.data || [];
+    }
+    
+    res.json({ success: true, inventory });
+  } catch (error) {
+    console.error('Failed to fetch inventory:', error.message);
+    res.status(500).json({ 
+      error: 'Could not load inventory from Prokip',
+      details: error.message 
+    });
+  }
+});
 
 /**
  * Create product in Prokip and sync to connected stores
@@ -27,30 +95,44 @@ router.post('/products', [
   }
 
   const { name, sku, sellPrice, purchasePrice, quantity } = req.body;
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
-
-  if (!prokip?.token || !prokip?.locationId) {
-    return res.status(400).json({ error: 'Prokip config not found' });
-  }
-
-  const headers = {
-    Authorization: `Bearer ${prokip.token}`,
-    'Content-Type': 'application/json',
-    Accept: 'application/json'
-  };
-
+  
   try {
-    // Create product in Prokip
-    const response = await axios.post(PROKIP_BASE + 'product', {
-      name,
-      sku,
-      sell_price: parseFloat(sellPrice),
-      purchase_price: parseFloat(purchasePrice || 0),
-      initial_quantity: parseInt(quantity || 0),
-      location_id: prokip.locationId
-    }, { headers });
-
-    const createdProduct = response.data.data;
+    let createdProduct;
+    let headers;
+    
+    if (!MOCK_PROKIP) {
+      // Use prokipService for real API
+      createdProduct = await prokipService.createProduct({
+        name,
+        sku,
+        sellPrice,
+        purchasePrice,
+        quantity
+      });
+      headers = await prokipService.getAuthHeaders();
+    } else {
+      const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+      if (!prokip?.token || !prokip?.locationId) {
+        return res.status(400).json({ error: 'Prokip not configured. Please log in first.' });
+      }
+      
+      headers = {
+        Authorization: `Bearer ${prokip.token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      };
+      
+      const response = await axios.post(PROKIP_BASE + 'product', {
+        name,
+        sku,
+        sell_price: parseFloat(sellPrice),
+        purchase_price: parseFloat(purchasePrice || 0),
+        initial_quantity: parseInt(quantity || 0),
+        location_id: prokip.locationId
+      }, { headers });
+      
+      createdProduct = response.data.data;
+    }
 
     // Sync to all connected stores
     const connections = await prisma.connection.findMany();
@@ -68,21 +150,15 @@ router.post('/products', [
 
         await createProductInStore(conn, storeProduct);
         
-        // Create inventory cache entry
-        await prisma.inventoryCache.upsert({
-          where: {
-            connectionId_sku: {
-              connectionId: conn.id,
-              sku
-            }
-          },
-          update: {
-            quantity: parseInt(quantity || 0)
-          },
-          create: {
+        // Create inventory log entry
+        await prisma.inventoryLog.create({
+          data: {
             connectionId: conn.id,
+            productId: createdProduct?.id?.toString() || sku,
+            productName: name,
             sku,
-            quantity: parseInt(quantity || 0)
+            quantity: parseInt(quantity || 0),
+            price: parseFloat(sellPrice)
           }
         });
 
@@ -111,7 +187,7 @@ router.post('/products', [
   } catch (error) {
     console.error('Failed to create product in Prokip:', error.response?.data || error.message);
     res.status(500).json({
-      error: 'Failed to create product',
+      error: 'Could not create product. Please try again.',
       details: error.response?.data || error.message
     });
   }
@@ -132,19 +208,32 @@ router.post('/sales', [
   }
 
   const { products, customerName, paymentMethod } = req.body;
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
-
-  if (!prokip?.token || !prokip?.locationId) {
-    return res.status(400).json({ error: 'Prokip config not found' });
-  }
-
-  const headers = {
-    Authorization: `Bearer ${prokip.token}`,
-    'Content-Type': 'application/json',
-    Accept: 'application/json'
-  };
-
+  
+  let headers;
+  let locationId;
+  
   try {
+    if (!MOCK_PROKIP) {
+      const isAuthenticated = await prokipService.isAuthenticated();
+      if (!isAuthenticated) {
+        return res.status(401).json({ error: 'Please log in to Prokip first' });
+      }
+      headers = await prokipService.getAuthHeaders();
+      const config = await prokipService.getProkipConfig();
+      locationId = config?.locationId;
+    } else {
+      const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+      if (!prokip?.token || !prokip?.locationId) {
+        return res.status(400).json({ error: 'Prokip not configured' });
+      }
+      headers = {
+        Authorization: `Bearer ${prokip.token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      };
+      locationId = prokip.locationId;
+    }
+
     // Get Prokip product IDs for the SKUs
     const productsResponse = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
     const prokipProducts = productsResponse.data.data;
@@ -175,7 +264,7 @@ router.post('/sales', [
     // Create sale in Prokip
     const sellBody = {
       sells: [{
-        location_id: parseInt(prokip.locationId),
+        location_id: parseInt(locationId),
         contact_id: 1,
         transaction_date: new Date().toISOString().slice(0, 19).replace('T', ' '),
         invoice_no: `MANUAL-${Date.now()}`,
@@ -199,9 +288,11 @@ router.post('/sales', [
       data: {
         connectionId: 0, // Use 0 for Prokip operations not tied to a specific store
         orderId: `MANUAL-${Date.now()}`,
-        prokipSellId: saleResponse.data.id?.toString(),
-        operationType: 'sale',
-        timestamp: new Date()
+        orderNumber: `MANUAL-${Date.now()}`,
+        customerName: 'Walk-in Customer',
+        totalAmount: parseFloat(total),
+        status: 'completed',
+        orderDate: new Date()
       }
     });
 
@@ -212,21 +303,24 @@ router.post('/sales', [
     for (const conn of connections) {
       for (const product of products) {
         try {
-          // Get current inventory from cache
-          const cache = await prisma.inventoryCache.findFirst({
+          // Get current inventory from log
+          const inventoryLog = await prisma.inventoryLog.findFirst({
             where: {
               connectionId: conn.id,
               sku: product.sku
             }
           });
 
-          if (cache) {
-            const newQuantity = cache.quantity - parseInt(product.quantity);
+          if (inventoryLog) {
+            const newQuantity = inventoryLog.quantity - parseInt(product.quantity);
             await updateInventoryInStore(conn, product.sku, newQuantity);
             
-            await prisma.inventoryCache.update({
-              where: { id: cache.id },
-              data: { quantity: newQuantity }
+            await prisma.inventoryLog.update({
+              where: { id: inventoryLog.id },
+              data: { 
+                quantity: newQuantity,
+                lastSynced: new Date()
+              }
             });
 
             syncResults.push({
@@ -327,9 +421,11 @@ router.post('/purchases', [
       data: {
         connectionId: 0, // Use 0 for Prokip operations not tied to a specific store
         orderId: `PURCHASE-${Date.now()}`,
-        prokipSellId: purchaseResponse.data.id?.toString(),
-        operationType: 'purchase',
-        timestamp: new Date()
+        orderNumber: `PURCHASE-${Date.now()}`,
+        customerName: supplier?.name || 'Unknown Supplier',
+        totalAmount: parseFloat(total),
+        status: 'completed',
+        orderDate: new Date()
       }
     });
 
@@ -340,31 +436,37 @@ router.post('/purchases', [
     for (const conn of connections) {
       for (const product of products) {
         try {
-          // Get current inventory from cache
-          let cache = await prisma.inventoryCache.findFirst({
+          // Get current inventory from log
+          let inventoryLog = await prisma.inventoryLog.findFirst({
             where: {
               connectionId: conn.id,
               sku: product.sku
             }
           });
 
-          if (!cache) {
-            // Create cache entry if doesn't exist
-            cache = await prisma.inventoryCache.create({
+          if (!inventoryLog) {
+            // Create log entry if doesn't exist
+            inventoryLog = await prisma.inventoryLog.create({
               data: {
                 connectionId: conn.id,
+                productId: product.product_id?.toString() || product.sku,
+                productName: product.name || 'Unknown Product',
                 sku: product.sku,
-                quantity: 0
+                quantity: 0,
+                price: parseFloat(product.unit_price || 0)
               }
             });
           }
 
-          const newQuantity = cache.quantity + parseInt(product.quantity);
+          const newQuantity = inventoryLog.quantity + parseInt(product.quantity);
           await updateInventoryInStore(conn, product.sku, newQuantity);
           
-          await prisma.inventoryCache.update({
-            where: { id: cache.id },
-            data: { quantity: newQuantity }
+          await prisma.inventoryLog.update({
+            where: { id: inventoryLog.id },
+            data: { 
+              quantity: newQuantity,
+              lastSynced: new Date()
+            }
           });
 
           syncResults.push({
@@ -396,6 +498,60 @@ router.post('/purchases', [
     res.status(500).json({
       error: 'Failed to record purchase',
       details: error.response?.data || error.message
+    });
+  }
+});
+
+/**
+ * Get sales from Prokip
+ */
+router.get('/sales', async (req, res) => {
+  try {
+    let sales;
+    
+    if (!MOCK_PROKIP) {
+      // Use prokipService for real API
+      const { startDate, endDate, locationId } = req.query;
+      sales = await prokipService.getSales(locationId, startDate, endDate);
+    } else {
+      const headers = await getHeaders();
+      const response = await axios.get(PROKIP_BASE + 'sell?per_page=-1', { headers });
+      sales = response.data.data || [];
+    }
+    
+    res.json({ success: true, sales });
+  } catch (error) {
+    console.error('Failed to fetch sales:', error.message);
+    res.status(500).json({ 
+      error: 'Could not load sales from Prokip',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Get purchases from Prokip
+ */
+router.get('/purchases', async (req, res) => {
+  try {
+    let purchases;
+    
+    if (!MOCK_PROKIP) {
+      // Use prokipService for real API
+      const { startDate, endDate, locationId } = req.query;
+      purchases = await prokipService.getPurchases(locationId, startDate, endDate);
+    } else {
+      const headers = await getHeaders();
+      const response = await axios.get(PROKIP_BASE + 'purchase?per_page=-1', { headers });
+      purchases = response.data.data || [];
+    }
+    
+    res.json({ success: true, purchases });
+  } catch (error) {
+    console.error('Failed to fetch purchases:', error.message);
+    res.status(500).json({ 
+      error: 'Could not load purchases from Prokip',
+      details: error.message 
     });
   }
 });

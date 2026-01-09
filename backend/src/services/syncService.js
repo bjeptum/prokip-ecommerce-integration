@@ -2,6 +2,7 @@ const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
 const { updateInventoryInStore } = require('./storeService');
 const { mapOrderToProkipSell, mapRefundToProkipProducts, mapCancellationProducts } = require('./prokipMapper');
+const prokipService = require('./prokipService');
 
 const prisma = new PrismaClient();
 const MOCK_PROKIP = process.env.MOCK_PROKIP === 'true';
@@ -41,6 +42,28 @@ function isOrderPaid(data, platform) {
     return ['completed', 'processing'].includes(data.status);
   }
   return false;
+}
+
+/**
+ * Get Prokip headers - uses prokipService for real API, falls back to direct config for mocks
+ */
+async function getProkipHeaders() {
+  if (!MOCK_PROKIP) {
+    // Use prokipService for real API (handles token refresh automatically)
+    return await prokipService.getAuthHeaders();
+  }
+  
+  // For mocks, use direct config
+  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+  if (!prokip || !prokip.token) {
+    throw new Error('Prokip not configured');
+  }
+  
+  return {
+    Authorization: `Bearer ${prokip.token}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json'
+  };
 }
 
 /**
@@ -154,26 +177,29 @@ async function processPartialRefund(connection, data, platform, prokipHeaders) {
  */
 async function restoreInventoryInStoreAndCache(connection, sku, quantity) {
   try {
-    // Update cache
-    const cache = await prisma.inventoryCache.findFirst({
+    // Update inventory log
+    const inventoryLog = await prisma.inventoryLog.findFirst({
       where: { 
         connectionId: connection.id,
         sku 
       }
     });
 
-    if (cache) {
-      const newQuantity = cache.quantity + quantity;
-      await prisma.inventoryCache.update({
-        where: { id: cache.id },
-        data: { quantity: newQuantity }
+    if (inventoryLog) {
+      const newQuantity = inventoryLog.quantity + quantity;
+      await prisma.inventoryLog.update({
+        where: { id: inventoryLog.id },
+        data: { 
+          quantity: newQuantity,
+          lastSynced: new Date()
+        }
       });
       
       // Update store inventory
       await updateInventoryInStore(connection, sku, newQuantity);
       console.log(`✓ Restored ${quantity} units of SKU ${sku} (new total: ${newQuantity})`);
     } else {
-      console.log(`⚠️ No inventory cache found for SKU ${sku}, skipping store update`);
+      console.log(`⚠️ No inventory log found for SKU ${sku}, skipping store update`);
     }
   } catch (error) {
     console.error(`Failed to restore inventory for SKU ${sku}:`, error.message);
@@ -191,9 +217,40 @@ async function restoreInventoryInStoreAndCache(connection, sku, quantity) {
  * Main webhook processing function
  */
 async function processStoreToProkip(storeUrl, topic, data, platform) {
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
-  if (!prokip || !prokip.token || !prokip.locationId) {
-    console.error('Prokip config not found or incomplete');
+  // Check Prokip authentication - for real API, use prokipService
+  let prokip;
+  let headers;
+  
+  try {
+    if (!MOCK_PROKIP) {
+      // Real API - check authentication via service
+      const isAuthenticated = await prokipService.isAuthenticated();
+      if (!isAuthenticated) {
+        console.error('Not authenticated with Prokip. Please log in first.');
+        return;
+      }
+      prokip = await prokipService.getProkipConfig();
+      headers = await getProkipHeaders();
+    } else {
+      // Mock mode - use direct config
+      prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+      if (!prokip || !prokip.token || !prokip.locationId) {
+        console.error('Prokip config not found or incomplete');
+        return;
+      }
+      headers = {
+        Authorization: `Bearer ${prokip.token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      };
+    }
+  } catch (error) {
+    console.error('Failed to get Prokip authentication:', error.message);
+    return;
+  }
+
+  if (!prokip?.locationId) {
+    console.error('Prokip location not configured');
     return;
   }
 
@@ -202,12 +259,6 @@ async function processStoreToProkip(storeUrl, topic, data, platform) {
     console.error(`No connection found for store: ${storeUrl}`);
     return;
   }
-
-  const headers = {
-    Authorization: `Bearer ${prokip.token}`,
-    'Content-Type': 'application/json',
-    Accept: 'application/json'
-  };
 
   const orderId = (data.id || data.number)?.toString();
 
@@ -257,7 +308,7 @@ async function processStoreToProkip(storeUrl, topic, data, platform) {
       const lineItems = platform === 'shopify' ? data.line_items : data.line_items;
       for (const item of lineItems || []) {
         if (item.sku) {
-          const cache = await prisma.inventoryCache.findFirst({
+          const inventoryLog = await prisma.inventoryLog.findFirst({
             where: { 
               connectionId: connection.id,
               sku: item.sku 
@@ -284,9 +335,12 @@ async function processStoreToProkip(storeUrl, topic, data, platform) {
           data: {
             connectionId: connection.id,
             orderId,
-            prokipSellId: response.data.id?.toString(),
-            operationType: 'webhook',
-            timestamp: new Date()
+            orderNumber: data.order_number || data.number?.toString(),
+            customerName: data.customer?.first_name || data.billing?.first_name || 'Guest',
+            customerEmail: data.customer?.email || data.billing?.email,
+            totalAmount: parseFloat(data.total || data.total_price || 0),
+            status: 'completed',
+            orderDate: new Date(data.created_at || data.date_created)
           }
         });
         console.log(`✓ Sale recorded in Prokip for order ${orderId}`);
@@ -330,41 +384,82 @@ async function processStoreToProkip(storeUrl, topic, data, platform) {
 }
 
 async function pollProkipToStores() {
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
-  if (!prokip || !prokip.token) return;
-
-  const headers = { Authorization: `Bearer ${prokip.token}`, Accept: 'application/json' };
-
+  let headers;
+  let stockData;
+  
   try {
-    const response = await axios.get(PROKIP_BASE + 'product-stock-report', { headers });
-    const stockData = response.data; // array of stock items
-
-    const connections = await prisma.connection.findMany();
-
-    for (const conn of connections) {
-      if (!conn.syncEnabled) continue; // Skip if sync disabled
-      const caches = await prisma.inventoryCache.findMany({ where: { connectionId: conn.id } });
-
-      for (const item of stockData) {
-        const cache = caches.find(c => c.sku === item.sku);
-        const currentQty = parseInt(item.stock || item.qty_available || 0);
-
-        if (cache && cache.quantity !== currentQty) {
-          await updateInventoryInStore(conn, item.sku, currentQty);
-          await prisma.inventoryCache.update({
-            where: { id: cache.id },
-            data: { quantity: currentQty }
-          });
-        } else if (!cache) {
-          await prisma.inventoryCache.create({
-            data: { connectionId: conn.id, sku: item.sku, quantity: currentQty }
-          });
-        }
+    if (!MOCK_PROKIP) {
+      // Real API - use prokipService
+      const isAuthenticated = await prokipService.isAuthenticated();
+      if (!isAuthenticated) {
+        console.log('Not authenticated with Prokip, skipping sync poll');
+        return;
       }
+      
+      // Get inventory from real Prokip API
+      stockData = await prokipService.getInventory();
+      headers = await prokipService.getAuthHeaders();
+    } else {
+      // Mock mode
+      const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+      if (!prokip || !prokip.token) return;
+      
+      headers = { Authorization: `Bearer ${prokip.token}`, Accept: 'application/json' };
+      
+      const response = await axios.get(PROKIP_BASE + 'product-stock-report', { headers });
+      stockData = response.data;
     }
   } catch (error) {
-    console.error('Polling Prokip stock failed:', error.response?.data || error.message);
+    console.error('Failed to get Prokip stock data:', error.message);
+    return;
+  }
+
+  if (!stockData || !Array.isArray(stockData)) {
+    // Handle case where stockData might be nested in response
+    stockData = stockData?.data || [];
+  }
+
+  const connections = await prisma.connection.findMany();
+
+  for (const conn of connections) {
+    if (!conn.syncEnabled) continue; // Skip if sync disabled
+    const inventoryLogs = await prisma.inventoryLog.findMany({ where: { connectionId: conn.id } });
+
+    for (const item of stockData) {
+      const log = inventoryLogs.find(c => c.sku === item.sku);
+      const currentQty = parseInt(item.stock || item.qty_available || 0);
+      const productName = item.product_name || item.name || 'Unknown Product';
+      const productId = item.product_id || item.id?.toString() || item.sku;
+      const price = parseFloat(item.price || item.sell_price_inc_tax || 0);
+
+      try {
+        if (log && log.quantity !== currentQty) {
+          await updateInventoryInStore(conn, item.sku, currentQty);
+          await prisma.inventoryLog.update({
+            where: { id: log.id },
+            data: { 
+              quantity: currentQty,
+              price: price,
+              lastSynced: new Date()
+            }
+          });
+        } else if (!log) {
+          await prisma.inventoryLog.create({
+            data: { 
+              connectionId: conn.id, 
+              sku: item.sku, 
+              quantity: currentQty,
+              productId: productId,
+              productName: productName,
+              price: price
+            }
+          });
+        }
+      } catch (error) {
+        console.error(`Failed to sync inventory for SKU ${item.sku}:`, error.message);
+      }
+    }
   }
 }
 
-module.exports = { processStoreToProkip, pollProkipToStores };
+module.exports = { processStoreToProkip, pollProkipToStores, getProkipHeaders };
