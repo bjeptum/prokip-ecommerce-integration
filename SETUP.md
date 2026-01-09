@@ -4,16 +4,19 @@
 
 Complete setup instructions for the Prokip E-commerce Integration platform - a production-ready system connecting Shopify and WooCommerce stores with the Prokip inventory management system.
 
-### System Requirements
+---
+
+## System Requirements
+
 - **Node.js** v16+ ([Download](https://nodejs.org))
 - **PostgreSQL** 12+ ([Download](https://www.postgresql.org/download/))
-- **HTTPS domain** (required for Shopify OAuth - use Caddy, Nginx, or ngrok)
-- **Shopify Partner Account** (free at [partners.shopify.com](https://partners.shopify.com))
-- **WooCommerce store** with REST API enabled (optional)
+- **Prokip Account** with API access
+- **Shopify Partner Account** (for Shopify integration)
+- **WooCommerce Store** with REST API enabled (for WooCommerce integration)
 
 ---
 
-## Quick Start
+## Installation
 
 ### 1. Clone and Install
 
@@ -47,7 +50,7 @@ sudo -u postgres psql
 CREATE DATABASE prokip_integration;
 
 # Set password (if needed)
-ALTER USER postgres PASSWORD 'prokip123';
+ALTER USER postgres PASSWORD 'your_password';
 
 # Exit
 \q
@@ -56,7 +59,7 @@ ALTER USER postgres PASSWORD 'prokip123';
 ### 3. Configure Environment
 
 ```bash
-# Copy example file
+# Copy example file (or create new)
 cp .env.example .env
 
 # Edit with your settings
@@ -67,33 +70,29 @@ nano .env
 
 ```dotenv
 # Database
-DATABASE_URL=postgresql://postgres:prokip123@localhost:5432/prokip_integration?schema=public
+DATABASE_URL=postgresql://postgres:your_password@localhost:5432/prokip_integration?schema=public
 
 # Server
 PORT=3000
 NODE_ENV=development
 
-# Mock Mode (false for production, true for testing)
-MOCK_MODE=false
-
-# Shopify Credentials (from Partners Dashboard)
-SHOPIFY_CLIENT_ID=your_api_key_here
-SHOPIFY_CLIENT_SECRET=your_api_secret_here
-SHOPIFY_SCOPES=read_products,write_products,read_inventory,write_inventory,read_orders,write_orders,read_fulfillments,write_fulfillments
-
-# URLs (update with your domain)
-REDIRECT_URI=https://prokip.local/connections/callback/shopify
-WEBHOOK_URL=https://prokip.local/connections/webhook/shopify
-
 # Prokip API
 PROKIP_API=https://api.prokip.africa
 
-# JWT Secret (generate random string)
-JWT_SECRET=change_this_to_a_very_long_random_string_in_production
+# Shopify OAuth Credentials (from Partners Dashboard)
+SHOPIFY_CLIENT_ID=your_shopify_client_id
+SHOPIFY_CLIENT_SECRET=your_shopify_client_secret
+SHOPIFY_SCOPES=read_products,write_products,read_inventory,write_inventory,read_locations,read_orders
+REDIRECT_URI=https://your-domain.com/connections/callback/shopify
 
-# Default Admin
-DEFAULT_ADMIN_USER=admin
-DEFAULT_ADMIN_PASS=admin123
+# WooCommerce OAuth (optional)
+WOOCOMMERCE_CLIENT_ID=your_woo_client_id
+WOOCOMMERCE_CLIENT_SECRET=your_woo_client_secret
+
+# Mock Mode (for development/testing)
+MOCK_PROKIP=false
+MOCK_SHOPIFY=false
+MOCK_WOO=false
 ```
 
 ### 4. Database Migration
@@ -107,11 +106,12 @@ npx prisma migrate dev
 ```
 
 This creates the database schema with tables:
-- `User` - Authentication
-- `Connection` - Store connections
-- `InventoryCache` - SKU inventory
-- `SalesLog` - Transaction history
-- `ProkipConfig` - Prokip credentials
+- `users` - User authentication
+- `connections` - Store connections
+- `inventory_logs` - Inventory sync history
+- `sales_logs` - Transaction history
+- `webhook_events` - Webhook payloads
+- `prokip_config` - Prokip credentials and settings
 
 ### 5. Start Application
 
@@ -121,17 +121,15 @@ npm start
 
 Expected output:
 ```
-Server running on http://localhost:3000
-Cron job scheduled: Prokip → Stores inventory sync every 5 minutes
+✅ Database connected
+🚀 Server running on http://localhost:3000
 ```
 
 ### 6. Access Dashboard
 
-Navigate to: `https://prokip.local` (or your configured domain)
+Navigate to: `http://localhost:3000`
 
-Default login:
-- Username: `admin`
-- Password: `admin123`
+Login with your **Prokip credentials** (username and password).
 
 ---
 
@@ -144,104 +142,106 @@ Default login:
 3. Choose **Create app manually**
 4. Fill in details:
    - **App name**: Prokip Integration
-   - **App URL**: `https://prokip.local`
-   - **Allowed redirection URL(s)**: `https://prokip.local/connections/callback/shopify`
+   - **App URL**: `https://your-domain.com`
+   - **Allowed redirection URL(s)**: `https://your-domain.com/connections/callback/shopify`
 
-### Configure Permissions
+### Configure API Scopes
 
-Under **Configuration** → **App setup**:
+In your Shopify app settings, add these **Admin API access scopes**:
 
-**Scopes:**
 ```
 read_products
 write_products
 read_inventory
 write_inventory
+read_locations
 read_orders
-write_orders
-read_fulfillments
-write_fulfillments
 ```
 
-### Get Credentials
+**Important Notes:**
+- Order webhooks (`orders/create`, `orders/paid`, etc.) require **Protected Customer Data** access
+- To request protected data access, go to your app's **API access** → **Protected customer data access**
+- Complete the data protection questionnaire and wait for Shopify approval
 
-Under **Overview**:
-- Copy **API key** → Set as `SHOPIFY_CLIENT_ID` in `.env`
-- Copy **API secret key** → Set as `SHOPIFY_CLIENT_SECRET` in `.env`
+### Get API Credentials
 
-### Install App (Testing)
-
-1. Under **Test your app**, select a development store
-2. Click **Install app**
-3. Or use the install URL: `https://{store}.myshopify.com/admin/oauth/authorize?client_id={CLIENT_ID}`
-
----
-
-## HTTPS Configuration
-
-### Option 1: Caddy (Recommended)
-
-**Install Caddy:**
-```bash
-# Ubuntu/Debian
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update && sudo apt install caddy
-```
-
-**Caddyfile:**
-```
-prokip.local {
-    reverse_proxy localhost:3000
-}
-```
-
-**Start Caddy:**
-```bash
-sudo caddy start
-```
-
-### Option 2: ngrok (Development)
-
-```bash
-# Install ngrok
-npm install -g ngrok
-
-# Start tunnel
-ngrok http 3000
-```
-
-Copy the HTTPS URL (e.g., `https://abc123.ngrok.io`) and update:
-- `.env` → `REDIRECT_URI` and `WEBHOOK_URL`
-- Shopify app settings → Redirect URLs
+1. In your Shopify app, go to **API credentials**
+2. Copy the **API key** → `SHOPIFY_CLIENT_ID`
+3. Copy the **API secret key** → `SHOPIFY_CLIENT_SECRET`
+4. Add these to your `.env` file
 
 ---
 
 ## WooCommerce Setup
 
-### Enable REST API
+### Option 1: Application Password (Recommended)
 
-1. Go to WordPress Admin → **WooCommerce** → **Settings**
-2. Navigate to **Advanced** → **REST API**
-3. Click **Add Key**
-4. Set:
+1. In WordPress admin, go to **Users** → **Your Profile**
+2. Scroll to **Application Passwords**
+3. Enter a name (e.g., "Prokip Integration")
+4. Click **Add New Application Password**
+5. Copy the generated password (shown only once)
+
+**In the dashboard:**
+- Enter your store URL (e.g., `https://your-store.com`)
+- Enter your WordPress username
+- Enter the Application Password
+
+### Option 2: REST API Keys
+
+1. In WordPress admin, go to **WooCommerce** → **Settings** → **Advanced** → **REST API**
+2. Click **Add Key**
+3. Set:
    - **Description**: Prokip Integration
-   - **User**: Your admin user
+   - **User**: Select an admin user
    - **Permissions**: Read/Write
-5. Click **Generate API Key**
-6. Copy **Consumer key** and **Consumer secret**
+4. Click **Generate API Key**
+5. Copy the **Consumer Key** and **Consumer Secret**
 
-### Connect in Dashboard
+---
 
-1. Login to Prokip dashboard
-2. Click profile → **Module Settings**
+## Connecting Stores
+
+### Connect Shopify Store
+
+1. Login to the dashboard with your Prokip credentials
+2. Select your business location
+3. Click **Connect Shopify**
+4. Enter your store URL (e.g., `your-store.myshopify.com`)
+5. Click **Connect**
+6. Authorize the app in the Shopify popup
+
+### Connect WooCommerce Store
+
+1. Login to the dashboard with your Prokip credentials
+2. Select your business location
 3. Click **Connect WooCommerce**
-4. Enter:
-   - **Store URL**: `https://yourstore.com`
-   - **Consumer Key**: (from above)
-   - **Consumer Secret**: (from above)
-5. Click **Connect Store**
+4. Enter your store URL
+5. Enter your WordPress username
+6. Enter your Application Password
+7. Click **Connect**
+
+---
+
+## Syncing Inventory
+
+### Manual Sync
+
+1. Go to a connected store in the sidebar
+2. Click **Sync Products**
+3. Choose **Sync Inventory** to push Prokip inventory to the store
+
+### What Gets Synced
+
+- Product inventory quantities from Prokip → Connected stores
+- Products are matched by **SKU**
+- Inventory tracking is automatically enabled in Shopify if not already
+
+### Sync Requirements
+
+- Products must exist in both Prokip and the connected store
+- Products must have matching SKUs
+- For Shopify: `read_inventory`, `write_inventory`, `read_locations` scopes required
 
 ---
 
@@ -249,127 +249,86 @@ Copy the HTTPS URL (e.g., `https://abc123.ngrok.io`) and update:
 
 ### Database Connection Issues
 
-**Error:** `Can't reach database server`
-
-**Solution:**
 ```bash
 # Check PostgreSQL is running
 sudo systemctl status postgresql
 
-# Check connection
-psql -U postgres -d prokip_integration
-
-# Verify DATABASE_URL in .env
-```
-
-### Prisma Client Errors
-
-**Error:** `Cannot find module '@prisma/client'`
-
-**Solution:**
-```bash
-npx prisma generate
-npm install
+# Test connection
+psql -h localhost -U postgres -d prokip_integration
 ```
 
 ### Shopify OAuth Errors
 
-**Error:** `Redirect URI mismatch`
+- Verify `REDIRECT_URI` matches exactly in Shopify app settings
+- Ensure HTTPS is used for production
+- Check `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET` are correct
 
-**Solution:**
-- Ensure `.env` `REDIRECT_URI` matches Shopify app settings exactly
-- Must use HTTPS (except localhost)
-- Check for trailing slashes
+### Shopify "read_locations scope not approved"
 
-### Port Already in Use
+This means you need to:
+1. Go to Shopify Partners → Your App → API access
+2. Add `read_locations` to your scopes
+3. Re-authorize the app on your store
 
-**Error:** `EADDRINUSE: address already in use :::3000`
+### Shopify "Inventory item does not have inventory tracking enabled"
 
-**Solution:**
-```bash
-# Find process using port 3000
-lsof -i :3000
+The system automatically enables inventory tracking, but if it fails:
+1. Go to your Shopify product
+2. Check "Track quantity"
+3. Try syncing again
 
-# Kill the process
-kill -9 <PID>
+### WooCommerce Connection Fails
 
-# Or change PORT in .env
-```
+- Verify the store URL is correct (include `https://`)
+- Check REST API is enabled in WooCommerce settings
+- Ensure your user has admin permissions
+- For Application Password: verify the password is correct (no spaces)
 
----
+### Prokip Login Issues
 
-## Testing Setup
-
-### Mock Mode
-
-For testing without real API credentials:
-
-```bash
-# In .env
-MOCK_MODE=true
-
-# Start mock servers
-node tests/mock-servers.js
-
-# In another terminal
-npm start
-```
-
-See [MOCK_SERVER_TESTING.md](MOCK_SERVER_TESTING.md) for details.
-
-### Verify Installation
-
-```bash
-# Check database
-npx prisma studio
-
-# Test API
-curl http://localhost:3000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}'
-```
+- Verify your Prokip username and password
+- Check `PROKIP_API` is set to `https://api.prokip.africa`
+- Ensure your Prokip account has API access
 
 ---
 
 ## Production Deployment
 
-### Pre-deployment Checklist
+### Environment Variables
 
-- [ ] Update `JWT_SECRET` to strong random value
-- [ ] Change default admin password
-- [ ] Set `NODE_ENV=production`
-- [ ] Configure production database with SSL
-- [ ] Update all URLs to production domain
-- [ ] Enable database backups
-- [ ] Set up process manager (PM2)
-- [ ] Configure reverse proxy (Nginx/Caddy)
-- [ ] Set up monitoring and logging
-- [ ] Review Shopify app settings
-- [ ] Test webhook delivery
+Set these for production:
 
-### PM2 Setup
+```dotenv
+NODE_ENV=production
+DATABASE_URL=postgresql://user:pass@production-db:5432/prokip_integration
+REDIRECT_URI=https://your-production-domain.com/connections/callback/shopify
+```
+
+### HTTPS Requirement
+
+Shopify OAuth requires HTTPS. Options:
+- Use a reverse proxy (Nginx, Caddy) with SSL
+- Deploy to a platform with automatic SSL (Heroku, Railway, Render)
+- Use ngrok for local development with HTTPS
+
+### Database Backups
 
 ```bash
-# Install PM2
-npm install -g pm2
+# Backup
+pg_dump prokip_integration > backup.sql
 
-# Start application
-pm2 start src/app.js --name prokip-integration
-
-# Enable startup script
-pm2 startup
-pm2 save
+# Restore
+psql prokip_integration < backup.sql
 ```
 
 ---
 
-## Next Steps
+## Support
 
-1. Complete setup
-2. Read [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) for architecture details
-3. Review [FRONTEND_IMPLEMENTATION_GUIDE.md](FRONTEND_IMPLEMENTATION_GUIDE.md) for UI customization
-4. Test with [MOCK_SERVER_TESTING.md](MOCK_SERVER_TESTING.md)
-5. Connect your first store!
+For issues or questions:
+1. Check the [Implementation Guide](IMPLEMENTATION_GUIDE.md) for technical details
+2. Review the [Testing Guide](TESTING_GUIDE.md) for debugging
+3. Check server logs for error messages
 
 
 

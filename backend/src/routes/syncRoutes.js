@@ -261,32 +261,55 @@ router.post('/inventory', async (req, res) => {
       const price = product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0;
       
       try {
-        await updateInventoryInStore(connection, sku, parseInt(quantity));
+        // Try to update inventory in the store (Shopify/WooCommerce)
+        let storeUpdateSuccess = false;
+        try {
+          await updateInventoryInStore(connection, sku, parseInt(quantity));
+          storeUpdateSuccess = true;
+        } catch (storeError) {
+          console.error(`Store inventory update failed for SKU ${sku}:`, storeError.message);
+          // Continue to update the log even if store update fails
+        }
         
-        // Update inventory log
-        await prisma.inventoryLog.upsert({
+        // Update inventory log using findFirst + create/update pattern
+        // This works regardless of whether compound unique constraint exists
+        const existingLog = await prisma.inventoryLog.findFirst({
           where: {
-            connectionId_sku: {
-              connectionId: connection.id,
-              sku
-            }
-          },
-          create: {
             connectionId: connection.id,
-            productId: product.id?.toString() || sku,
-            productName: product.name,
-            sku,
-            quantity: parseInt(quantity),
-            price: parseFloat(price)
-          },
-          update: {
-            quantity: parseInt(quantity),
-            price: parseFloat(price),
-            lastSynced: new Date()
+            sku: sku
           }
         });
         
-        results.push({ sku, status: 'success', quantity, price });
+        if (existingLog) {
+          await prisma.inventoryLog.update({
+            where: { id: existingLog.id },
+            data: {
+              quantity: parseInt(quantity),
+              price: parseFloat(price),
+              lastSynced: new Date()
+            }
+          });
+        } else {
+          await prisma.inventoryLog.create({
+            data: {
+              connectionId: connection.id,
+              productId: product.id?.toString() || sku,
+              productName: product.name,
+              sku,
+              quantity: parseInt(quantity),
+              price: parseFloat(price)
+            }
+          });
+        }
+        
+        results.push({ 
+          sku, 
+          status: storeUpdateSuccess ? 'success' : 'partial', 
+          quantity, 
+          price,
+          storeUpdated: storeUpdateSuccess,
+          message: storeUpdateSuccess ? 'Synced successfully' : 'Logged but store update failed'
+        });
       } catch (error) {
         console.error(`Failed to sync inventory for SKU ${sku}:`, error.message);
         results.push({ sku, status: 'error', error: error.message });

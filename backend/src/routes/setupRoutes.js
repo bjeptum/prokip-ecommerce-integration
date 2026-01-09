@@ -401,9 +401,20 @@ router.post('/products', [
         try {
           await createProductInStore(connection, storeProduct);
           
-          // Create inventory log entry
-          await prisma.inventoryLog.create({
-            data: {
+          // Create or update inventory log entry
+          await prisma.inventoryLog.upsert({
+            where: {
+              connectionId_sku: {
+                connectionId: connection.id,
+                sku: product.sku
+              }
+            },
+            update: {
+              productId: product.id?.toString() || product.sku,
+              productName: product.name,
+              price: parseFloat(product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0)
+            },
+            create: {
               connectionId: connection.id,
               productId: product.id?.toString() || product.sku,
               productName: product.name,

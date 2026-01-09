@@ -57,6 +57,7 @@ model Connection {
   inventoryLogs InventoryLog[]
   salesLogs     SalesLog[]
   webhookEvents WebhookEvent[]
+  syncErrors    SyncError[]
 
   @@unique([userId, platform, storeUrl])
   @@map("connections")
@@ -75,6 +76,8 @@ model InventoryLog {
   // Relations
   connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
+  // Compound unique constraint for upsert operations
+  @@unique([connectionId, sku])
   @@map("inventory_logs")
 }
 
@@ -124,6 +127,22 @@ model ProkipConfig {
   updatedAt    DateTime  @updatedAt
 
   @@map("prokip_config")
+}
+
+model SyncError {
+  id           Int       @id @default(autoincrement())
+  connectionId Int
+  errorType    String // 'inventory', 'product', 'order', etc.
+  errorMessage String
+  errorDetails String? // JSON with additional details
+  resolved     Boolean   @default(false)
+  resolvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  // Relations
+  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@map("sync_errors")
 }
 
 // Migration notes:

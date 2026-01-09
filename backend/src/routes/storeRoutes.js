@@ -149,19 +149,26 @@ async function fetchWooCommerceProducts(connection) {
 router.get('/:id/products', async (req, res) => {
   try {
     const connectionId = parseInt(req.params.id);
+    console.log(`📦 Fetching products for connection ID: ${connectionId}`);
+    
     const connection = await prisma.connection.findUnique({
       where: { id: connectionId }
     });
 
     if (!connection) {
+      console.log(`❌ Connection ${connectionId} not found`);
       return res.status(404).json({ error: 'Store not found' });
     }
 
+    console.log(`✅ Found connection: ${connection.platform} - ${connection.storeUrl}`);
     let products = [];
     
     if (connection.platform === 'shopify') {
       try {
+        console.log(`🛍️ Fetching products from Shopify: ${connection.storeUrl}`);
         const rawProducts = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+        console.log(`📊 Raw Shopify products received: ${rawProducts?.length || 0} items`);
+        
         products = rawProducts.map(p => ({
           id: p.id,
           name: p.title,
@@ -170,6 +177,7 @@ router.get('/:id/products', async (req, res) => {
           stock: p.variants[0]?.inventory_quantity || 0,
           synced: true
         }));
+        console.log(`✅ Mapped ${products.length} Shopify products`);
       } catch (error) {
         console.error(`Shopify API error for ${connection.storeUrl}:`, error.message);
         
@@ -231,9 +239,10 @@ router.get('/:id/products', async (req, res) => {
       }
     }
 
+    console.log(`📤 Returning ${products.length} products`);
     res.json(products);
   } catch (error) {
-    console.error('Error fetching store products:', error);
+    console.error('❌ Error fetching store products:', error);
     res.status(500).json({ error: 'Failed to fetch products' });
   }
 });
