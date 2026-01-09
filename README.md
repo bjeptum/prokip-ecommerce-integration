@@ -8,7 +8,7 @@ Built with **Node.js**, **Express.js**, **Prisma ORM**, and **PostgreSQL** for e
 
 ---
 
-## ✨ Key Features
+##  Key Features
 
 ### 🔌 Multi-Platform Integration
 - **Shopify**: Full OAuth 2.0 integration with automatic webhook registration
@@ -16,7 +16,7 @@ Built with **Node.js**, **Express.js**, **Prisma ORM**, and **PostgreSQL** for e
 - **Multiple Stores**: Connect unlimited stores from both platforms simultaneously
 - **Platform Agnostic**: Each store operates independently with unified inventory
 
-### 🔄 Real-Time Synchronization
+### Real-Time Synchronization
 - **Bidirectional Sync**: 
   - Prokip inventory → Push to all connected stores
   - Store products → Display alongside Prokip data
@@ -24,7 +24,7 @@ Built with **Node.js**, **Express.js**, **Prisma ORM**, and **PostgreSQL** for e
 - **Manual Sync**: On-demand inventory synchronization from dashboard
 - **Inventory Tracking**: Automatic enabling of Shopify inventory tracking
 
-### 🎨 Modern Web Dashboard
+###  Modern Web Dashboard
 - **Prokip-Themed UI**: Professional interface matching Prokip's branding
 - **Prokip Login**: Authenticate with your Prokip username/password
 - **Business Location Selection**: Choose which Prokip location to sync
@@ -33,14 +33,14 @@ Built with **Node.js**, **Express.js**, **Prisma ORM**, and **PostgreSQL** for e
 - **Store Analytics**: View orders, products, and sync status per store
 - **Smart Notifications**: Success/error messages with auto-dismiss
 
-### 🔐 Security & Authentication
+###  Security & Authentication
 - **Prokip OAuth**: Login with Prokip credentials (username/password)
 - **Token Management**: Automatic token refresh when expired
 - **OAuth 2.0**: Industry-standard Shopify app installation
 - **Encrypted Credentials**: Secure storage of API keys and tokens
 - **CSRF Protection**: State parameter validation in OAuth flow
 
-### 📊 Data Management
+###  Data Management
 - **PostgreSQL Database**: ACID-compliant data persistence
 - **Prisma ORM**: Type-safe database queries with automated migrations
 - **Inventory Logging**: Track all inventory sync operations
@@ -49,7 +49,7 @@ Built with **Node.js**, **Express.js**, **Prisma ORM**, and **PostgreSQL** for e
 
 ---
 
-## 🏗️ Tech Stack
+## Tech Stack
 
 ### Backend
 - **Runtime**: Node.js v16+
@@ -158,7 +158,7 @@ model ProkipConfig {
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 - Node.js v16 or higher
@@ -205,7 +205,7 @@ http://localhost:3000
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 prokip-ecommerce-integration/
@@ -251,7 +251,7 @@ prokip-ecommerce-integration/
 
 ---
 
-## 🔧 Environment Variables
+##  Environment Variables
 
 ```dotenv
 # Database
@@ -282,7 +282,7 @@ MOCK_WOO=false
 
 ---
 
-## 📖 Documentation
+##  Documentation
 
 - [Setup Guide](SETUP.md) - Detailed installation and configuration
 - [Testing Guide](TESTING_GUIDE.md) - How to test the integration
@@ -290,7 +290,7 @@ MOCK_WOO=false
 
 ---
 
-## 🔌 API Endpoints
+##  API Endpoints
 
 ### Authentication
 - `POST /auth/prokip-login` - Login with Prokip credentials
@@ -321,7 +321,3 @@ MOCK_WOO=false
 - `POST /sync/inventory` - Sync inventory from Prokip to stores
 
 ---
-
-## 📄 License
-
-MIT License - see LICENSE file for details.
