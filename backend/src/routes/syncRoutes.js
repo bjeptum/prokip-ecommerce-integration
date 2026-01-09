@@ -193,8 +193,7 @@ router.post('/pull-sales', async (req, res) => {
     // Verify connection belongs to user
     const connection = await prisma.connection.findFirst({
       where: {
-        id: connectionId,
-        userId: userId
+        id: parseInt(connectionId)
       }
     });
 
@@ -222,6 +221,98 @@ router.post('/pull-sales', async (req, res) => {
     res.status(500).json({ 
       error: 'Failed to pull sales',
       message: 'An unexpected error occurred while pulling sales'
+    });
+  }
+});
+
+// Sync inventory and prices from Prokip to connected store
+router.post('/inventory', async (req, res) => {
+  const { connectionId } = req.body;
+  
+  if (!connectionId) {
+    return res.status(400).json({ error: 'Connection ID is required' });
+  }
+  
+  try {
+    const connection = await prisma.connection.findUnique({
+      where: { id: parseInt(connectionId) }
+    });
+    
+    if (!connection) {
+      return res.status(404).json({ error: 'Connection not found' });
+    }
+    
+    // Get Prokip products
+    const prokipService = require('../services/prokipService');
+    const inventory = await prokipService.getInventory();
+    const products = await prokipService.getProducts();
+    
+    const { updateInventoryInStore } = require('../services/storeService');
+    const results = [];
+    
+    for (const product of products) {
+      const sku = product.sku;
+      if (!sku) continue;
+      
+      // Find stock for this product
+      const stockItem = inventory.find(i => i.sku === sku);
+      const quantity = stockItem?.stock || stockItem?.qty_available || 
+                       product.product_variations?.[0]?.variations?.[0]?.variation_location_details?.[0]?.qty_available || 0;
+      const price = product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0;
+      
+      try {
+        await updateInventoryInStore(connection, sku, parseInt(quantity));
+        
+        // Update inventory log
+        await prisma.inventoryLog.upsert({
+          where: {
+            connectionId_sku: {
+              connectionId: connection.id,
+              sku
+            }
+          },
+          create: {
+            connectionId: connection.id,
+            productId: product.id?.toString() || sku,
+            productName: product.name,
+            sku,
+            quantity: parseInt(quantity),
+            price: parseFloat(price)
+          },
+          update: {
+            quantity: parseInt(quantity),
+            price: parseFloat(price),
+            lastSynced: new Date()
+          }
+        });
+        
+        results.push({ sku, status: 'success', quantity, price });
+      } catch (error) {
+        console.error(`Failed to sync inventory for SKU ${sku}:`, error.message);
+        results.push({ sku, status: 'error', error: error.message });
+      }
+    }
+    
+    // Update connection last sync time
+    await prisma.connection.update({
+      where: { id: connection.id },
+      data: { lastSync: new Date() }
+    });
+    
+    const successCount = results.filter(r => r.status === 'success').length;
+    const errorCount = results.filter(r => r.status === 'error').length;
+    
+    res.json({
+      success: true,
+      message: `Inventory sync complete: ${successCount} synced, ${errorCount} errors`,
+      results
+    });
+    
+  } catch (error) {
+    console.error('Inventory sync failed:', error);
+    res.status(500).json({
+      error: 'Inventory sync failed',
+      details: error.message
     });
   }
 });
