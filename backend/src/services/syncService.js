@@ -154,26 +154,29 @@ async function processPartialRefund(connection, data, platform, prokipHeaders) {
  */
 async function restoreInventoryInStoreAndCache(connection, sku, quantity) {
   try {
-    // Update cache
-    const cache = await prisma.inventoryCache.findFirst({
+    // Update inventory log
+    const inventoryLog = await prisma.inventoryLog.findFirst({
       where: { 
         connectionId: connection.id,
         sku 
       }
     });
 
-    if (cache) {
-      const newQuantity = cache.quantity + quantity;
-      await prisma.inventoryCache.update({
-        where: { id: cache.id },
-        data: { quantity: newQuantity }
+    if (inventoryLog) {
+      const newQuantity = inventoryLog.quantity + quantity;
+      await prisma.inventoryLog.update({
+        where: { id: inventoryLog.id },
+        data: { 
+          quantity: newQuantity,
+          lastSynced: new Date()
+        }
       });
       
       // Update store inventory
       await updateInventoryInStore(connection, sku, newQuantity);
       console.log(`✓ Restored ${quantity} units of SKU ${sku} (new total: ${newQuantity})`);
     } else {
-      console.log(`⚠️ No inventory cache found for SKU ${sku}, skipping store update`);
+      console.log(`⚠️ No inventory log found for SKU ${sku}, skipping store update`);
     }
   } catch (error) {
     console.error(`Failed to restore inventory for SKU ${sku}:`, error.message);
@@ -257,7 +260,7 @@ async function processStoreToProkip(storeUrl, topic, data, platform) {
       const lineItems = platform === 'shopify' ? data.line_items : data.line_items;
       for (const item of lineItems || []) {
         if (item.sku) {
-          const cache = await prisma.inventoryCache.findFirst({
+          const inventoryLog = await prisma.inventoryLog.findFirst({
             where: { 
               connectionId: connection.id,
               sku: item.sku 
@@ -284,9 +287,12 @@ async function processStoreToProkip(storeUrl, topic, data, platform) {
           data: {
             connectionId: connection.id,
             orderId,
-            prokipSellId: response.data.id?.toString(),
-            operationType: 'webhook',
-            timestamp: new Date()
+            orderNumber: data.order_number || data.number?.toString(),
+            customerName: data.customer?.first_name || data.billing?.first_name || 'Guest',
+            customerEmail: data.customer?.email || data.billing?.email,
+            totalAmount: parseFloat(data.total || data.total_price || 0),
+            status: 'completed',
+            orderDate: new Date(data.created_at || data.date_created)
           }
         });
         console.log(`✓ Sale recorded in Prokip for order ${orderId}`);
@@ -343,21 +349,35 @@ async function pollProkipToStores() {
 
     for (const conn of connections) {
       if (!conn.syncEnabled) continue; // Skip if sync disabled
-      const caches = await prisma.inventoryCache.findMany({ where: { connectionId: conn.id } });
+      const inventoryLogs = await prisma.inventoryLog.findMany({ where: { connectionId: conn.id } });
 
       for (const item of stockData) {
-        const cache = caches.find(c => c.sku === item.sku);
+        const log = inventoryLogs.find(c => c.sku === item.sku);
         const currentQty = parseInt(item.stock || item.qty_available || 0);
+        const productName = item.product_name || item.name || 'Unknown Product';
+        const productId = item.product_id || item.id?.toString() || item.sku;
+        const price = parseFloat(item.price || item.sell_price_inc_tax || 0);
 
-        if (cache && cache.quantity !== currentQty) {
+        if (log && log.quantity !== currentQty) {
           await updateInventoryInStore(conn, item.sku, currentQty);
-          await prisma.inventoryCache.update({
-            where: { id: cache.id },
-            data: { quantity: currentQty }
+          await prisma.inventoryLog.update({
+            where: { id: log.id },
+            data: { 
+              quantity: currentQty,
+              price: price,
+              lastSynced: new Date()
+            }
           });
-        } else if (!cache) {
-          await prisma.inventoryCache.create({
-            data: { connectionId: conn.id, sku: item.sku, quantity: currentQty }
+        } else if (!log) {
+          await prisma.inventoryLog.create({
+            data: { 
+              connectionId: conn.id, 
+              sku: item.sku, 
+              quantity: currentQty,
+              productId: productId,
+              productName: productName,
+              price: price
+            }
           });
         }
       }

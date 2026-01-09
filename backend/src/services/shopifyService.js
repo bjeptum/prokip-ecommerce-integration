@@ -142,8 +142,12 @@ async function getShopifyOrders(shop, accessToken, limit = 50) {
     });
     return response.data.orders;
   } catch (error) {
-    console.error('Failed to get Shopify orders:', error.response?.data || error.message);
-    throw new Error('Unable to fetch orders from Shopify');
+    const errorDetails = error.response?.data || error.message;
+    console.error('Failed to get Shopify orders:', errorDetails);
+    console.error('Error status:', error.response?.status);
+    console.error('Shop:', shop);
+    console.error('Access token present:', !!accessToken);
+    throw error; // Throw original error for better debugging
   }
 }
 

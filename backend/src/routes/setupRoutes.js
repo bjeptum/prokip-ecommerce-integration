@@ -295,19 +295,15 @@ router.post('/products', [
             location_id: prokip.locationId
           }, { headers });
 
-          // Create inventory cache entry
-          await prisma.inventoryCache.upsert({
-            where: {
-              connectionId_sku: {
-                connectionId: connection.id,
-                sku: product.sku
-              }
-            },
-            update: { quantity: product.initial_quantity },
-            create: {
+          // Create inventory log entry
+          await prisma.inventoryLog.create({
+            data: {
               connectionId: connection.id,
+              productId: product.id?.toString() || product.sku,
+              productName: product.name,
               sku: product.sku,
-              quantity: product.initial_quantity
+              quantity: product.initial_quantity || 0,
+              price: parseFloat(product.sell_price_inc_tax || product.price || 0)
             }
           });
 
@@ -364,19 +360,15 @@ router.post('/products', [
         try {
           await createProductInStore(connection, storeProduct);
           
-          // Create inventory cache entry
-          await prisma.inventoryCache.upsert({
-            where: {
-              connectionId_sku: {
-                connectionId: connection.id,
-                sku: product.sku
-              }
-            },
-            update: {},
-            create: {
+          // Create inventory log entry
+          await prisma.inventoryLog.create({
+            data: {
               connectionId: connection.id,
+              productId: product.id?.toString() || product.sku,
+              productName: product.name,
               sku: product.sku,
-              quantity: 0
+              quantity: 0, // Will be synced via inventory sync
+              price: parseFloat(product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0)
             }
           });
 

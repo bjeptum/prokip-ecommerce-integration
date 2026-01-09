@@ -139,6 +139,14 @@ router.get('/callback/shopify', async (req, res) => {
       throw new Error('Received invalid access token from Shopify');
     }
 
+    // Check if connection already exists
+    const existingConnection = await prisma.connection.findFirst({
+      where: {
+        platform: 'shopify',
+        storeUrl: shop
+      }
+    });
+
     if (existingConnection) {
       // Update existing connection
       await prisma.connection.update({
@@ -147,26 +155,17 @@ router.get('/callback/shopify', async (req, res) => {
       });
       console.log(`Updated Shopify connection for ${shop}`);
     } else {
-      // Legacy: create connection without userId (for backward compatibility)
-      const connection = await prisma.connection.upsert({
-        where: {
-          platform_storeUrl: {
-            platform: 'shopify',
-            storeUrl: shop
-          }
-        },
-        update: {
-          accessToken,
-          lastSync: new Date(),
-          syncEnabled: true
-        },
-        create: {
+      // Create new connection (using default userId = 1 for backward compatibility)
+      const connection = await prisma.connection.create({
+        data: {
+          userId: 1, // Default to first user
           platform: 'shopify',
           storeUrl: shop,
           accessToken,
           syncEnabled: true
         }
       });
+      console.log(`Created new Shopify connection for ${shop}`);
     }
 
     await registerShopifyWebhooks(shop, accessToken);
@@ -640,10 +639,11 @@ router.delete('/:id', async (req, res) => {
   const connectionId = parseInt(id);
   
   try {
-    // Delete all related data first (cascade delete)
-    await prisma.inventoryCache.deleteMany({ where: { connectionId } });
+    // Delete all related data first (cascade delete should handle this, but being explicit)
+    await prisma.inventoryLog.deleteMany({ where: { connectionId } });
     await prisma.salesLog.deleteMany({ where: { connectionId } });
     await prisma.syncError.deleteMany({ where: { connectionId } });
+    await prisma.webhookEvent.deleteMany({ where: { connectionId } });
     
     // Now delete the connection
     await prisma.connection.delete({ where: { id: connectionId } });
@@ -700,9 +700,10 @@ router.delete('/:id', async (req, res) => {
     const connectionId = parseInt(req.params.id);
     
     // Delete all related data
-    await prisma.inventoryCache.deleteMany({ where: { connectionId } });
+    await prisma.inventoryLog.deleteMany({ where: { connectionId } });
     await prisma.salesLog.deleteMany({ where: { connectionId } });
     await prisma.syncError.deleteMany({ where: { connectionId } });
+    await prisma.webhookEvent.deleteMany({ where: { connectionId } });
     await prisma.connection.delete({ where: { id: connectionId } });
     
     res.json({ success: true, message: 'Store disconnected successfully' });

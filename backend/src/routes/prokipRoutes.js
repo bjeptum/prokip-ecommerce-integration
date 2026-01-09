@@ -68,21 +68,23 @@ router.post('/products', [
 
         await createProductInStore(conn, storeProduct);
         
-        // Create inventory cache entry
-        await prisma.inventoryCache.upsert({
+        // Create inventory log entry
+        await prisma.inventoryLog.upsert({
           where: {
-            connectionId_sku: {
-              connectionId: conn.id,
-              sku
-            }
+            id: 0 // Will always create since id 0 doesn't exist
           },
           update: {
-            quantity: parseInt(quantity || 0)
+            quantity: parseInt(quantity || 0),
+            price: parseFloat(sellPrice),
+            lastSynced: new Date()
           },
           create: {
             connectionId: conn.id,
+            productId: id?.toString() || sku,
+            productName: name,
             sku,
-            quantity: parseInt(quantity || 0)
+            quantity: parseInt(quantity || 0),
+            price: parseFloat(sellPrice)
           }
         });
 
@@ -199,9 +201,11 @@ router.post('/sales', [
       data: {
         connectionId: 0, // Use 0 for Prokip operations not tied to a specific store
         orderId: `MANUAL-${Date.now()}`,
-        prokipSellId: saleResponse.data.id?.toString(),
-        operationType: 'sale',
-        timestamp: new Date()
+        orderNumber: `MANUAL-${Date.now()}`,
+        customerName: 'Walk-in Customer',
+        totalAmount: parseFloat(total),
+        status: 'completed',
+        orderDate: new Date()
       }
     });
 
@@ -212,21 +216,24 @@ router.post('/sales', [
     for (const conn of connections) {
       for (const product of products) {
         try {
-          // Get current inventory from cache
-          const cache = await prisma.inventoryCache.findFirst({
+          // Get current inventory from log
+          const inventoryLog = await prisma.inventoryLog.findFirst({
             where: {
               connectionId: conn.id,
               sku: product.sku
             }
           });
 
-          if (cache) {
-            const newQuantity = cache.quantity - parseInt(product.quantity);
+          if (inventoryLog) {
+            const newQuantity = inventoryLog.quantity - parseInt(product.quantity);
             await updateInventoryInStore(conn, product.sku, newQuantity);
             
-            await prisma.inventoryCache.update({
-              where: { id: cache.id },
-              data: { quantity: newQuantity }
+            await prisma.inventoryLog.update({
+              where: { id: inventoryLog.id },
+              data: { 
+                quantity: newQuantity,
+                lastSynced: new Date()
+              }
             });
 
             syncResults.push({
@@ -327,9 +334,11 @@ router.post('/purchases', [
       data: {
         connectionId: 0, // Use 0 for Prokip operations not tied to a specific store
         orderId: `PURCHASE-${Date.now()}`,
-        prokipSellId: purchaseResponse.data.id?.toString(),
-        operationType: 'purchase',
-        timestamp: new Date()
+        orderNumber: `PURCHASE-${Date.now()}`,
+        customerName: supplier?.name || 'Unknown Supplier',
+        totalAmount: parseFloat(total),
+        status: 'completed',
+        orderDate: new Date()
       }
     });
 
@@ -340,31 +349,37 @@ router.post('/purchases', [
     for (const conn of connections) {
       for (const product of products) {
         try {
-          // Get current inventory from cache
-          let cache = await prisma.inventoryCache.findFirst({
+          // Get current inventory from log
+          let inventoryLog = await prisma.inventoryLog.findFirst({
             where: {
               connectionId: conn.id,
               sku: product.sku
             }
           });
 
-          if (!cache) {
-            // Create cache entry if doesn't exist
-            cache = await prisma.inventoryCache.create({
+          if (!inventoryLog) {
+            // Create log entry if doesn't exist
+            inventoryLog = await prisma.inventoryLog.create({
               data: {
                 connectionId: conn.id,
+                productId: product.product_id?.toString() || product.sku,
+                productName: product.name || 'Unknown Product',
                 sku: product.sku,
-                quantity: 0
+                quantity: 0,
+                price: parseFloat(product.unit_price || 0)
               }
             });
           }
 
-          const newQuantity = cache.quantity + parseInt(product.quantity);
+          const newQuantity = inventoryLog.quantity + parseInt(product.quantity);
           await updateInventoryInStore(conn, product.sku, newQuantity);
           
-          await prisma.inventoryCache.update({
-            where: { id: cache.id },
-            data: { quantity: newQuantity }
+          await prisma.inventoryLog.update({
+            where: { id: inventoryLog.id },
+            data: { 
+              quantity: newQuantity,
+              lastSynced: new Date()
+            }
           });
 
           syncResults.push({

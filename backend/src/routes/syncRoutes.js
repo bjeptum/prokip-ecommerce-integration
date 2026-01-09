@@ -19,31 +19,26 @@ router.get('/status', async (req, res) => {
   let prokipStats = { products: 0, sales: 0, purchases: 0 };
 
   try {
-    // Check if inventoryCache table exists
-    if (prisma.inventoryCache) {
-      const prokipProducts = await prisma.inventoryCache.groupBy({
-        by: ['sku'],
-        _count: { sku: true }
-      });
-      prokipStats.products = prokipProducts.length;
-    }
+    // Get unique product count from inventory logs
+    const prokipProducts = await prisma.inventoryLog.groupBy({
+      by: ['sku'],
+      _count: { sku: true }
+    });
+    prokipStats.products = prokipProducts.length;
 
-    // Check if salesLog table exists
-    if (prisma.salesLog) {
-      const salesCount = await prisma.salesLog.count({
-        where: { 
-          status: 'completed'
+    // Get sales count - count all completed/paid orders
+    const salesCount = await prisma.salesLog.count({
+      where: { 
+        status: {
+          in: ['completed', 'paid', 'processing']
         }
-      });
-      const purchasesCount = await prisma.salesLog.count({
-        where: {
-          status: 'purchase'
-        }
-      });
+      }
+    });
 
-      prokipStats.sales = salesCount;
-      prokipStats.purchases = purchasesCount;
-    }
+    // For purchases, we can count webhook events or use a different approach
+    // Since we don't have a separate purchase tracking, set to 0 or same as sales
+    prokipStats.sales = salesCount;
+    prokipStats.purchases = 0; // Not tracked separately in current schema
   } catch (error) {
     console.error('Error fetching Prokip stats:', error);
   }
@@ -54,11 +49,9 @@ router.get('/status', async (req, res) => {
 
     // Get product count for this connection
     try {
-      if (prisma.inventoryCache) {
-        productCount = await prisma.inventoryCache.count({
-          where: { connectionId: c.id }
-        });
-      }
+      productCount = await prisma.inventoryLog.count({
+        where: { connectionId: c.id }
+      });
     } catch (error) {
       // Table doesn't exist or other error
       productCount = 0;
@@ -66,14 +59,14 @@ router.get('/status', async (req, res) => {
 
     // Get order count from SalesLog for this connection
     try {
-      if (prisma.salesLog) {
-        orderCount = await prisma.salesLog.count({
-          where: {
-            connectionId: c.id,
-            status: 'completed'
+      orderCount = await prisma.salesLog.count({
+        where: {
+          connectionId: c.id,
+          status: {
+            in: ['completed', 'paid', 'processing']
           }
-        });
-      }
+        }
+      });
     } catch (error) {
       // Table doesn't exist or other error
       orderCount = 0;
@@ -83,6 +76,7 @@ router.get('/status', async (req, res) => {
       id: c.id,
       platform: c.platform,
       storeUrl: c.storeUrl,
+      storeName: c.storeName,
       lastSync: c.lastSync,
       syncEnabled: c.syncEnabled || true,
       productCount,

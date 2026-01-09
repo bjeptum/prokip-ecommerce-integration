@@ -24,46 +24,47 @@ model User {
 }
 
 model Connection {
-  id              Int      @id @default(autoincrement())
-  userId          Int
-  platform        String   // 'shopify', 'woocommerce'
-  storeUrl        String
-  storeName       String?
-  
+  id        Int     @id @default(autoincrement())
+  userId    Int
+  platform  String // 'shopify', 'woocommerce'
+  storeUrl  String
+  storeName String?
+
   // Shopify fields
-  accessToken     String?
+  accessToken       String?
   accessTokenSecret String?
-  
+
   // WooCommerce fields (encrypted)
-  consumerKey     String?   // JSON string with encrypted data
-  consumerSecret   String?   // JSON string with encrypted data
-  
+  consumerKey    String? // JSON string with encrypted data
+  consumerSecret String? // JSON string with encrypted data
+
   // Legacy WooCommerce fields (deprecated)
-  wooUsername     String?
-  wooAppPassword  String?
-  wooAppName      String?
-  
+  wooUsername    String?
+  wooAppPassword String?
+  wooAppName     String?
+
   // OAuth fields
-  oauthToken      String?
-  oauthSecret     String?
-  
-  lastSync        DateTime @default(now())
-  syncEnabled     Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  oauthToken  String?
+  oauthSecret String?
+
+  lastSync    DateTime @default(now())
+  syncEnabled Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   // Relations
-  user            User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  inventoryLogs   InventoryLog[]
-  salesLogs       SalesLog[]
-  webhookEvents   WebhookEvent[]
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  inventoryLogs InventoryLog[]
+  salesLogs     SalesLog[]
+  webhookEvents WebhookEvent[]
 
+  @@unique([userId, platform, storeUrl])
   @@map("connections")
 }
 
 model InventoryLog {
   id           Int      @id @default(autoincrement())
-  connectionId  Int
+  connectionId Int
   productId    String
   productName  String
   sku          String?
@@ -78,16 +79,16 @@ model InventoryLog {
 }
 
 model SalesLog {
-  id           Int      @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
   connectionId  Int
-  orderId      String
-  orderNumber  String?
-  customerName String?
+  orderId       String
+  orderNumber   String?
+  customerName  String?
   customerEmail String?
-  totalAmount  Float
-  status       String?
-  orderDate    DateTime
-  syncedAt     DateTime @default(now())
+  totalAmount   Float
+  status        String?
+  orderDate     DateTime
+  syncedAt      DateTime @default(now())
 
   // Relations
   connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
@@ -96,19 +97,30 @@ model SalesLog {
 }
 
 model WebhookEvent {
-  id           Int      @id @default(autoincrement())
-  connectionId  Int
-  eventType    String   // 'order.created', 'product.updated', etc.
-  payload      String   // JSON payload
-  processed    Boolean  @default(false)
+  id           Int       @id @default(autoincrement())
+  connectionId Int
+  eventType    String // 'order.created', 'product.updated', etc.
+  payload      String // JSON payload
+  processed    Boolean   @default(false)
   errorMessage String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
   processedAt  DateTime?
 
   // Relations
   connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@map("webhook_events")
+}
+
+model ProkipConfig {
+  id         Int      @id @default(1)
+  token      String
+  apiUrl     String
+  locationId String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("prokip_config")
 }
 
 // Migration notes:
