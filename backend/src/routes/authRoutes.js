@@ -103,6 +103,7 @@ router.post('/prokip-login', [
 /**
  * Set Prokip business location
  * After login, user selects a location to work with
+ * Also creates/finds a local user and returns a JWT for API authentication
  */
 router.post('/prokip-location', [
   body('locationId').notEmpty().withMessage('Location is required'),
@@ -116,9 +117,10 @@ router.post('/prokip-location', [
     });
   }
 
-  const { locationId, access_token, refresh_token, expires_in } = req.body;
+  const { locationId, access_token, refresh_token, expires_in, username } = req.body;
 
   try {
+    // Save Prokip config
     await prokipService.saveProkipConfig({
       access_token,
       refresh_token: refresh_token || null,
@@ -126,9 +128,31 @@ router.post('/prokip-location', [
       locationId
     });
 
+    // Create or find user based on locationId (using locationId as unique identifier)
+    const uniqueUsername = `prokip_${locationId}`;
+    let user = await prisma.user.findUnique({ where: { username: uniqueUsername } });
+    
+    if (!user) {
+      // Create new user for this Prokip location
+      const bcrypt = require('bcryptjs');
+      const hashedPassword = await bcrypt.hash(`prokip_${locationId}_${Date.now()}`, 10);
+      user = await prisma.user.create({
+        data: { 
+          username: uniqueUsername,
+          password: hashedPassword
+        }
+      });
+      console.log(`✅ Created new user for Prokip location ${locationId}`);
+    }
+
+    // Generate JWT for this user
+    const jwtToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '8h' });
+
     res.json({ 
       success: true,
-      message: 'Business location set successfully' 
+      message: 'Business location set successfully',
+      token: jwtToken,  // Return JWT for API authentication
+      userId: user.id
     });
   } catch (error) {
     console.error('Failed to set Prokip location:', error.message);

@@ -82,25 +82,43 @@ async function updateInventoryInStore(connection, sku, quantity) {
         headers: { 'X-Shopify-Access-Token': connection.accessToken }
       });
       const product = productsRes.data.products[0];
-      if (!product) throw new Error('Product not found');
+      if (!product) throw new Error(`Product with SKU ${sku} not found in Shopify`);
 
       const variant = product.variants[0]; // Assume first variant
       
-      // Get location - use configured location or default to first
-      const locations = await getShopifyLocations(connection.storeUrl, connection.accessToken);
-      let locationId;
+      // Get location - use configured location or try to fetch locations
+      let locationId = connection.defaultLocationId;
       
-      if (connection.defaultLocationId) {
-        // Use configured location
-        locationId = connection.defaultLocationId;
-      } else {
-        // Default to first location
-        locationId = locations[0].id;
+      if (!locationId) {
+        try {
+          // Try to get locations from Shopify
+          const locations = await getShopifyLocations(connection.storeUrl, connection.accessToken);
+          if (locations && locations.length > 0) {
+            locationId = locations[0].id;
+          }
+        } catch (locationError) {
+          // Location API requires 'read_locations' scope which may not be approved
+          // Check if error is about missing scope
+          const errorMsg = locationError.message || '';
+          if (errorMsg.includes('read_locations') || errorMsg.includes('merchant approval')) {
+            console.warn(`Shopify locations scope not approved for ${connection.storeUrl}. ` +
+              `To enable inventory sync, please approve the read_locations scope in your Shopify admin, ` +
+              `or configure a defaultLocationId for this connection.`);
+            throw new Error('Shopify locations permission not approved. Please approve read_locations scope or configure a default location.');
+          }
+          throw locationError;
+        }
+      }
+      
+      if (!locationId) {
+        throw new Error('No location ID available. Please configure a default location for this store.');
       }
 
       await updateShopifyInventory(connection.storeUrl, connection.accessToken, variant.inventory_item_id, locationId, quantity);
+      return { success: true, message: `Inventory updated for SKU ${sku}` };
     } catch (error) {
       console.error('Shopify inventory update failed:', error.message);
+      throw error; // Re-throw to let caller handle it
     }
   } else if (connection.platform === 'woocommerce') {
     try {

@@ -3,6 +3,8 @@ let currentUser = null;
 let currentBusinessLocation = null;
 let businessLocations = [];
 let prokipToken = null;
+let prokipRefreshToken = null;
+let prokipExpiresIn = null;
 let selectedStore = null;
 let selectedConnectionId = null;
 let productMatchesData = null;
@@ -19,21 +21,38 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // If returning from OAuth, check for existing session
   if (hasOAuthParams) {
-    const savedToken = localStorage.getItem('authToken');
-    if (savedToken) {
-      token = savedToken;
-      currentUser = { username: 'admin' }; // You might want to decode the JWT to get actual username
+    const savedProkipToken = localStorage.getItem('prokipToken');
+    if (savedProkipToken) {
+      prokipToken = savedProkipToken;
+      prokipRefreshToken = localStorage.getItem('prokipRefreshToken');
+      token = prokipToken; // Set token for API calls
+      currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      currentBusinessLocation = JSON.parse(localStorage.getItem('businessLocation') || 'null');
       handleOAuthCallback();
-      showDashboard();
+      if (currentBusinessLocation) {
+        showDashboard();
+      } else {
+        loadBusinessLocations();
+      }
       return;
     }
   }
   
-  // Otherwise, always show login screen initially (user requirement)
-  // Remove auto-login even if token exists
-  localStorage.removeItem('authToken');
-  localStorage.removeItem('businessLocation');
-  localStorage.removeItem('prokipToken');
+  // Check for existing Prokip session
+  const savedProkipToken = localStorage.getItem('prokipToken');
+  const savedLocation = localStorage.getItem('businessLocation');
+  
+  if (savedProkipToken && savedLocation) {
+    prokipToken = savedProkipToken;
+    prokipRefreshToken = localStorage.getItem('prokipRefreshToken');
+    token = prokipToken; // Set token for API calls
+    currentBusinessLocation = JSON.parse(savedLocation);
+    currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    showDashboard();
+    return;
+  }
+  
+  // Show login screen
   showLogin();
 });
 
@@ -201,84 +220,111 @@ async function prokipApiCall(endpoint, options = {}) {
   return response;
 }
 
-// Authentication functions
-async function login() {
-  console.log('🔐 Login attempt started...');
+// Authentication functions - Prokip Login
+async function loginToProkip() {
+  console.log('🔐 Prokip login attempt started...');
   
-  const username = document.getElementById('username').value;
-  const password = document.getElementById('password').value;
+  const username = document.getElementById('prokip-username').value.trim();
+  const password = document.getElementById('prokip-password').value;
+  const loginBtn = document.getElementById('login-btn');
+  const loginBtnText = document.getElementById('login-btn-text');
+  const loginSpinner = document.getElementById('login-spinner');
   
   console.log('Username:', username);
   console.log('Password provided:', password ? '✅ Yes' : '❌ No');
-  console.log('API_BASE_URL:', API_BASE_URL);
 
   if (!username || !password) {
     console.log('❌ Missing username or password');
-    document.getElementById('login-error').textContent = 'Please enter both username and password';
+    document.getElementById('login-error').textContent = 'Please enter your Prokip username and password';
     return;
   }
 
+  // Show loading state
+  loginBtn.disabled = true;
+  loginBtnText.textContent = 'Signing in...';
+  loginSpinner.style.display = 'inline-block';
+  document.getElementById('login-error').textContent = '';
+
   try {
-    console.log('🌐 Sending request to:', `${API_BASE_URL}/auth/login`);
+    console.log('🌐 Sending request to Prokip login...');
     
-    const res = await fetch(`${API_BASE_URL}/auth/login`, {
+    const res = await fetch(`${API_BASE_URL}/auth/prokip-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username: username, password: password })
     });
 
     console.log('📡 Response status:', res.status);
     const data = await res.json();
     console.log('📦 Response data:', data);
 
-    if (res.ok) {
-      console.log('✅ Login successful!');
-      token = data.token;
-      currentUser = { username };
-      localStorage.setItem('authToken', token);
+    if (res.ok && data.access_token) {
+      console.log('✅ Prokip login successful!');
       
-      // Prokip API is configured on the backend
-      // Just load business locations after successful login
-      await loadBusinessLocations();
+      // Store Prokip tokens
+      prokipToken = data.access_token;
+      prokipRefreshToken = data.refresh_token;
+      prokipExpiresIn = data.expires_in;
+      currentUser = { username };
+      
+      localStorage.setItem('prokipToken', prokipToken);
+      localStorage.setItem('prokipRefreshToken', prokipRefreshToken || '');
+      localStorage.setItem('currentUser', JSON.stringify(currentUser));
+      
+      // Store locations received from API
+      if (data.locations && data.locations.length > 0) {
+        businessLocations = data.locations;
+        showBusinessLocationSelection();
+      } else {
+        // No locations returned, show error
+        document.getElementById('login-error').textContent = 'No business locations found for this account';
+      }
     } else {
       console.log('❌ Login failed:', data.error);
-      document.getElementById('login-error').textContent = data.error || 'Login failed';
+      document.getElementById('login-error').textContent = data.error || 'Login failed. Please check your credentials.';
     }
   } catch (error) {
     console.error('❌ Network error:', error);
-    document.getElementById('login-error').textContent = 'Network error. Please try again.';
+    document.getElementById('login-error').textContent = 'Could not connect to server. Please check your connection.';
+  } finally {
+    // Reset button state
+    loginBtn.disabled = false;
+    loginBtnText.textContent = 'Sign In to Prokip';
+    loginSpinner.style.display = 'none';
   }
 }
 
-// Load business locations (mock for now since not using actual Prokip API)
+// Legacy login function (for backward compatibility)
+async function login() {
+  return loginToProkip();
+}
+
+// Load business locations from Prokip API
 async function loadBusinessLocations() {
-  // Mock business locations for development
-  // In production, these would come from Prokip API
-  businessLocations = [
-    {
-      id: 1,
-      name: 'Main Store',
-      city: 'Nairobi',
-      state: 'Kenya',
-      mobile: '+254 712 345 678'
-    },
-    {
-      id: 2,
-      name: 'Branch Store',
-      city: 'Mombasa',
-      state: 'Kenya',
-      mobile: '+254 722 345 678'
-    },
-    {
-      id: 3,
-      name: 'Warehouse',
-      city: 'Kisumu',
-      state: 'Kenya',
-      mobile: '+254 732 345 678'
+  if (!prokipToken) {
+    showLogin();
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/auth/prokip-locations`, {
+      headers: { 'Authorization': `Bearer ${prokipToken}` }
+    });
+    
+    const data = await res.json();
+    
+    if (data.success && data.locations) {
+      businessLocations = data.locations;
+      showBusinessLocationSelection();
+    } else {
+      showNotification('error', 'Could not load business locations');
+      showLogin();
     }
-  ];
-  
-  showBusinessLocationSelection();
+  } catch (error) {
+    console.error('Failed to load locations:', error);
+    showNotification('error', 'Failed to load business locations');
+    showLogin();
+  }
 }
 
 // Show business location selection screen
@@ -290,19 +336,41 @@ function showBusinessLocationSelection() {
   const locationsGrid = document.getElementById('locations-grid');
   locationsGrid.innerHTML = '';
 
+  if (!businessLocations || businessLocations.length === 0) {
+    locationsGrid.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-building"></i>
+        <h3>No Business Locations Found</h3>
+        <p>Please contact your administrator to set up business locations in Prokip.</p>
+        <button onclick="logoutFromProkip()" class="btn-secondary">
+          <i class="fas fa-sign-out-alt"></i> Logout
+        </button>
+      </div>
+    `;
+    return;
+  }
+
   businessLocations.forEach(location => {
     const locationCard = document.createElement('div');
     locationCard.className = 'location-card';
     locationCard.onclick = () => selectBusinessLocation(location);
+
+    // Handle different data formats from Prokip API
+    const locationName = location.name || location.location_name || 'Unnamed Location';
+    const city = location.city || location.location_city || 'N/A';
+    const state = location.state || location.location_state || '';
+    const country = location.country || location.location_country || '';
+    const phone = location.mobile || location.phone || location.location_mobile || 'No phone';
+    const address = [city, state, country].filter(Boolean).join(', ') || 'N/A';
 
     locationCard.innerHTML = `
       <div class="location-icon">
         <i class="fas fa-building"></i>
       </div>
       <div class="location-info">
-        <h3>${location.name}</h3>
-        <p><i class="fas fa-map-marker-alt"></i> ${location.city || 'N/A'}, ${location.state || 'N/A'}</p>
-        <p><i class="fas fa-phone"></i> ${location.mobile || 'No phone'}</p>
+        <h3>${locationName}</h3>
+        <p><i class="fas fa-map-marker-alt"></i> ${address}</p>
+        <p><i class="fas fa-phone"></i> ${phone}</p>
       </div>
       <div class="location-action">
         <i class="fas fa-arrow-right"></i>
@@ -314,12 +382,46 @@ function showBusinessLocationSelection() {
 }
 
 // Select a business location
-function selectBusinessLocation(location) {
+async function selectBusinessLocation(location) {
   currentBusinessLocation = location;
   localStorage.setItem('businessLocation', JSON.stringify(location));
   
+  // Save location to backend and get JWT token for API authentication
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/prokip-location`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        locationId: location.id,
+        access_token: prokipToken,
+        refresh_token: prokipRefreshToken,
+        expires_in: prokipExpiresIn,
+        username: currentUser?.username || currentUser?.email
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (data.token) {
+      // Use the JWT token returned by the backend for API calls
+      token = data.token;
+      localStorage.setItem('token', token);
+      console.log('✅ JWT token received and stored');
+    } else {
+      // Fallback to prokipToken if no JWT returned
+      token = prokipToken;
+      localStorage.setItem('token', token);
+      console.log('⚠️ Using prokipToken as fallback');
+    }
+  } catch (error) {
+    console.error('Failed to save location to backend:', error);
+    // Fallback to prokipToken
+    token = prokipToken;
+    localStorage.setItem('token', token);
+  }
+  
   // Update profile display
-  document.getElementById('profile-username').textContent = currentUser.username;
+  document.getElementById('profile-username').textContent = currentUser?.email || 'User';
   document.getElementById('profile-location').textContent = location.name;
 
   showDashboard();
@@ -332,19 +434,36 @@ function changeBusinessLocation() {
   showBusinessLocationSelection();
 }
 
-function logout() {
+// Logout from Prokip
+async function logoutFromProkip() {
+  try {
+    await fetch(`${API_BASE_URL}/auth/prokip-logout`, { method: 'POST' });
+  } catch (error) {
+    console.error('Logout error:', error);
+  }
+  
+  // Clear all state
   token = '';
+  prokipToken = null;
+  prokipRefreshToken = null;
+  prokipExpiresIn = null;
   currentUser = null;
   currentBusinessLocation = null;
-  prokipToken = null;
   selectedStore = null;
   businessLocations = [];
   
   localStorage.removeItem('authToken');
-  localStorage.removeItem('businessLocation');
   localStorage.removeItem('prokipToken');
+  localStorage.removeItem('prokipRefreshToken');
+  localStorage.removeItem('businessLocation');
+  localStorage.removeItem('currentUser');
   
   showLogin();
+}
+
+// Legacy logout function
+function logout() {
+  return logoutFromProkip();
 }
 
 function showLogin() {
@@ -353,8 +472,10 @@ function showLogin() {
   document.getElementById('dashboard').style.display = 'none';
   
   // Clear form
-  document.getElementById('username').value = '';
-  document.getElementById('password').value = '';
+  const usernameField = document.getElementById('prokip-username');
+  const passwordField = document.getElementById('prokip-password');
+  if (usernameField) usernameField.value = '';
+  if (passwordField) passwordField.value = '';
   document.getElementById('login-error').textContent = '';
 }
 
@@ -399,6 +520,8 @@ function navigateTo(pageName) {
     loadConnectedStores();
   } else if (pageName === 'prokip-operations') {
     loadProkipProducts();
+    loadProkipSales();
+    loadProkipPurchases();
   } else if (pageName.startsWith('store-')) {
     if (!selectedStore) {
       showNotification('error', 'Please select a store first');
@@ -632,15 +755,16 @@ function updateStoresOverview(stores) {
     const platform = store.platform.toLowerCase();
     const iconClass = platform === 'shopify' ? 'fab fa-shopify' : 'fas fa-shopping-cart';
     const iconBg = platform === 'shopify' ? '#96BF48' : '#96588A';
+    const displayName = store.storeName || store.storeUrl;
 
     return `
       <div class="store-overview-card">
-        <div class="store-overview-header" onclick="viewStore(${store.id}, '${store.platform}', '${store.storeUrl}')">
+        <div class="store-overview-header" onclick="viewStore(${store.id}, '${store.platform}', '${store.storeUrl}', '${displayName}')">
           <div class="store-overview-icon" style="background: ${iconBg};">
             <i class="${iconClass}"></i>
           </div>
           <div class="store-overview-info">
-            <h3>${store.platform}</h3>
+            <h3>${displayName}</h3>
             <p>${store.storeUrl}</p>
           </div>
         </div>
@@ -658,7 +782,7 @@ function updateStoresOverview(stores) {
           <button onclick="showProductSetupFlow(${store.id}, '${store.platform}', '${store.storeUrl}')" class="btn-small btn-primary">
             <i class="fas fa-sync-alt"></i> Setup Products
           </button>
-          <button onclick="viewStore(${store.id}, '${store.platform}', '${store.storeUrl}')" class="btn-small btn-secondary">
+          <button onclick="viewStore(${store.id}, '${store.platform}', '${store.storeUrl}', '${displayName}')" class="btn-small btn-secondary">
             <i class="fas fa-eye"></i> View Details
           </button>
         </div>
@@ -667,13 +791,17 @@ function updateStoresOverview(stores) {
   }).join('');
 }
 
-function viewStore(storeId, platform, storeUrl) {
-  console.log('viewStore called with:', { storeId, platform, storeUrl });
-  selectedStore = { id: storeId, platform, storeUrl };
+function viewStore(storeId, platform, storeUrl, storeName = null) {
+  console.log('viewStore called with:', { storeId, platform, storeUrl, storeName });
+  selectedStore = { id: storeId, platform, storeUrl, storeName };
   selectedConnectionId = storeId;
   
   // Show store menu section
   document.getElementById('store-menu-section').style.display = 'block';
+  
+  // Update store menu title to show "Connected Store - [name]"
+  const displayName = storeName || storeUrl;
+  document.getElementById('store-menu-title').textContent = `Connected Store - ${displayName}`;
   
   // Navigate to store products page
   navigateTo('store-products');
@@ -1058,8 +1186,7 @@ function updateActivityFeed(data) {
 async function loadConnectedStores() {
   try {
     console.log('🔄 Loading connected stores...');
-    const res = await apiCall('/sync/status');
-    const data = await res.json();
+    const data = await apiCall('/sync/status');
     
     console.log('📦 Sync status response:', data);
     
@@ -1220,10 +1347,13 @@ function displayProducts(products) {
     return;
   }
 
+  const currency = currentBusinessLocation?.currency || 'KES';
+  const storeName = selectedStore?.storeName || selectedStore?.storeUrl || 'Store';
+
   content.innerHTML = `
     <div class="content-card">
       <div class="card-header">
-        <h3><i class="fas fa-box"></i> Product Catalog</h3>
+        <h3><i class="fas fa-box"></i> Product Catalog - ${storeName}</h3>
         <span class="badge">${products.length} ${products.length === 1 ? 'Product' : 'Products'}</span>
       </div>
       <div class="table-responsive">
@@ -1247,7 +1377,7 @@ function displayProducts(products) {
                   </div>
                 </td>
                 <td><code class="sku-code">${product.sku || 'N/A'}</code></td>
-                <td><strong class="price-text">$${parseFloat(product.price || 0).toFixed(2)}</strong></td>
+                <td><strong class="price-text">${currency} ${parseFloat(product.price || 0).toLocaleString()}</strong></td>
                 <td><span class="stock-badge ${(product.stock || 0) > 0 ? 'stock-in' : 'stock-out'}">${product.stock || 0} units</span></td>
                 <td><span class="status-badge ${product.synced ? 'status-success' : 'status-warning'}">${product.synced ? 'Synced' : 'Pending'}</span></td>
               </tr>
@@ -1289,15 +1419,17 @@ function displayOrders(orders) {
     return;
   }
 
+  const currency = currentBusinessLocation?.currency || 'KES';
   const totalRevenue = orders.reduce((sum, order) => sum + parseFloat(order.total || 0), 0);
+  const storeName = selectedStore?.storeName || selectedStore?.storeUrl || 'Store';
 
   content.innerHTML = `
     <div class="content-card">
       <div class="card-header">
-        <h3><i class="fas fa-shopping-cart"></i> Order History</h3>
+        <h3><i class="fas fa-shopping-cart"></i> Order History from ${storeName}</h3>
         <div class="header-stats">
           <span class="badge">${orders.length} ${orders.length === 1 ? 'Order' : 'Orders'}</span>
-          <span class="revenue-badge">Total: $${totalRevenue.toFixed(2)}</span>
+          <span class="revenue-badge">Total: ${currency} ${totalRevenue.toLocaleString()}</span>
         </div>
       </div>
       <div class="table-responsive">
@@ -1309,6 +1441,7 @@ function displayOrders(orders) {
               <th>Date</th>
               <th>Total</th>
               <th>Status</th>
+              <th>Source</th>
             </tr>
           </thead>
           <tbody>
@@ -1322,8 +1455,9 @@ function displayOrders(orders) {
                   </div>
                 </td>
                 <td>${order.date || order.created_at ? new Date(order.date || order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}</td>
-                <td><strong class="price-text">$${parseFloat(order.total || order.total_price || 0).toFixed(2)}</strong></td>
-                <td><span class="status-badge status-success">${order.status || order.financial_status || 'Completed'}</span></td>
+                <td><strong class="price-text">${currency} ${parseFloat(order.total || order.total_price || 0).toLocaleString()}</strong></td>
+                <td><span class="status-badge ${getOrderStatusClass(order.status || order.financial_status)}">${order.status || order.financial_status || 'Completed'}</span></td>
+                <td><span class="source-badge store"><i class="fas fa-globe"></i> ${storeName}</span></td>
               </tr>
             `).join('')}
           </tbody>
@@ -1333,69 +1467,112 @@ function displayOrders(orders) {
   `;
 }
 
+function getOrderStatusClass(status) {
+  switch (status?.toLowerCase()) {
+    case 'completed':
+    case 'paid':
+      return 'status-success';
+    case 'pending':
+    case 'on-hold':
+      return 'status-warning';
+    case 'processing':
+      return 'status-info';
+    case 'cancelled':
+    case 'refunded':
+    case 'failed':
+      return 'status-danger';
+    default:
+      return 'status-secondary';
+  }
+}
+
 async function loadStoreAnalytics() {
   const content = document.getElementById('analytics-content');
   content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center; color: var(--gray-500);">Loading analytics...</p>';
   
+  if (!selectedStore) {
+    content.innerHTML = '<div class="empty-state-card"><h3>No Store Selected</h3><p>Please select a store first</p></div>';
+    return;
+  }
+  
   try {
     // Get analytics from the store endpoint
-    const res = await apiCall(`/stores/${selectedStore.id}/analytics`);
-    if (res.ok) {
-      const analytics = await res.json();
-      
-      content.innerHTML = `
-        <div class="analytics-grid">
-          <div class="analytics-card">
-            <div class="analytics-icon" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-              <i class="fas fa-box"></i>
-            </div>
-            <div class="analytics-content">
-              <div class="analytics-number">${analytics.syncedProducts || 0}</div>
-              <div class="analytics-label">Synced Products</div>
-              <div class="analytics-trend"><i class="fas fa-arrow-up"></i> Active</div>
-            </div>
+    const analytics = await apiCall(`/stores/${selectedStore.id}/analytics`);
+    const storeName = selectedStore.storeName || selectedStore.storeUrl;
+    const currency = currentBusinessLocation?.currency || 'KES';
+    
+    content.innerHTML = `
+      <div class="analytics-grid">
+        <div class="analytics-card">
+          <div class="analytics-icon" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+            <i class="fas fa-box"></i>
           </div>
-          
-          <div class="analytics-card">
-            <div class="analytics-icon" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
-              <i class="fas fa-shopping-cart"></i>
-            </div>
-            <div class="analytics-content">
-              <div class="analytics-number">${analytics.ordersProcessed || 0}</div>
-              <div class="analytics-label">Orders Processed</div>
-              <div class="analytics-trend"><i class="fas fa-check-circle"></i> Synced</div>
-            </div>
-          </div>
-          
-          <div class="analytics-card">
-            <div class="analytics-icon" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
-              <i class="fas fa-sync"></i>
-            </div>
-            <div class="analytics-content">
-              <div class="analytics-number">${analytics.lastSyncTime ? 'Active' : 'Pending'}</div>
-              <div class="analytics-label">Sync Status</div>
-              <div class="analytics-trend">${analytics.lastSyncTime ? new Date(analytics.lastSyncTime).toLocaleString() : 'Not synced yet'}</div>
-            </div>
-          </div>
-          
-          <div class="analytics-card">
-            <div class="analytics-icon" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
-              <i class="fas fa-database"></i>
-            </div>
-            <div class="analytics-content">
-              <div class="analytics-number">${selectedStore.platform}</div>
-              <div class="analytics-label">Platform</div>
-              <div class="analytics-trend"><i class="fas fa-plug"></i> Connected</div>
-            </div>
+          <div class="analytics-content">
+            <div class="analytics-number">${analytics.syncedProducts || 0}</div>
+            <div class="analytics-label">Synced Products</div>
+            <div class="analytics-trend"><i class="fas fa-arrow-up"></i> Active</div>
           </div>
         </div>
-      `;
-    } else {
-      content.innerHTML = '<div class="empty-state-card"><h3>Unable to load analytics</h3><p>Please try again later</p></div>';
-    }
+        
+        <div class="analytics-card">
+          <div class="analytics-icon" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+            <i class="fas fa-shopping-cart"></i>
+          </div>
+          <div class="analytics-content">
+            <div class="analytics-number">${analytics.ordersProcessed || 0}</div>
+            <div class="analytics-label">Orders Processed</div>
+            <div class="analytics-trend"><i class="fas fa-check-circle"></i> Synced</div>
+          </div>
+        </div>
+        
+        <div class="analytics-card">
+          <div class="analytics-icon" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+            <i class="fas fa-sync"></i>
+          </div>
+          <div class="analytics-content">
+            <div class="analytics-number">${analytics.lastSyncTime || analytics.lastSync ? 'Active' : 'Pending'}</div>
+            <div class="analytics-label">Sync Status</div>
+            <div class="analytics-trend">${analytics.lastSyncTime || analytics.lastSync ? new Date(analytics.lastSyncTime || analytics.lastSync).toLocaleString() : 'Not synced yet'}</div>
+          </div>
+        </div>
+        
+        <div class="analytics-card">
+          <div class="analytics-icon" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
+            <i class="fas fa-database"></i>
+          </div>
+          <div class="analytics-content">
+            <div class="analytics-number">${selectedStore.platform}</div>
+            <div class="analytics-label">Platform</div>
+            <div class="analytics-trend"><i class="fas fa-plug"></i> Connected</div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="analytics-detail-card">
+        <h3><i class="fas fa-store"></i> Store: ${storeName}</h3>
+        <div class="detail-grid">
+          <div class="detail-item">
+            <span class="detail-label">Platform:</span>
+            <span class="detail-value">${selectedStore.platform.charAt(0).toUpperCase() + selectedStore.platform.slice(1)}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Store URL:</span>
+            <span class="detail-value">${selectedStore.storeUrl}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Currency:</span>
+            <span class="detail-value">${currency}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Business Location:</span>
+            <span class="detail-value">${currentBusinessLocation?.name || 'N/A'}</span>
+          </div>
+        </div>
+      </div>
+    `;
   } catch (error) {
     console.error('Failed to load analytics:', error);
-    content.innerHTML = '<div class="empty-state-card"><h3>Error loading analytics</h3><p>Please check your connection and try again</p></div>';
+    content.innerHTML = `<div class="empty-state-card"><h3>Error loading analytics</h3><p>${error.message || 'Please check your connection and try again'}</p></div>`;
   }
 }
 
@@ -1406,11 +1583,229 @@ async function syncStoreProducts() {
     return;
   }
 
-  const confirmed = confirm('Do you want to push products from Prokip to this store?\n\nThis will sync all Prokip products to your connected store.');
-  if (!confirmed) return;
+  // Show sync options modal
+  const modalHtml = `
+    <div id="sync-modal" class="modal" style="display: flex;">
+      <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-header">
+          <h2><i class="fas fa-sync-alt"></i> Sync Options</h2>
+          <button class="close-btn" onclick="closeSyncModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin-bottom: 20px; color: var(--gray-600);">Choose a sync action for <strong>${selectedStore.storeName || selectedStore.storeUrl}</strong>:</p>
+          
+          <div class="sync-options">
+            <button class="sync-option-btn" onclick="viewStoreInventory()">
+              <i class="fas fa-boxes" style="color: var(--info-color);"></i>
+              <div class="sync-option-text">
+                <strong>View Store Inventory</strong>
+                <span>See current inventory levels from ${selectedStore.platform}</span>
+              </div>
+            </button>
+            
+            <button class="sync-option-btn" onclick="syncInventoryFromProkip()">
+              <i class="fas fa-download" style="color: var(--success-color);"></i>
+              <div class="sync-option-text">
+                <strong>Sync Inventory from Prokip</strong>
+                <span>Push Prokip inventory quantities to ${selectedStore.platform}</span>
+              </div>
+            </button>
+            
+            <button class="sync-option-btn" onclick="pushProductsToProkip()">
+              <i class="fas fa-upload" style="color: var(--warning-color);"></i>
+              <div class="sync-option-text">
+                <strong>Push Products to Store</strong>
+                <span>Create Prokip products in ${selectedStore.platform}</span>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Add modal to page
+  const existingModal = document.getElementById('sync-modal');
+  if (existingModal) existingModal.remove();
+  
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
 
+function closeSyncModal() {
+  const modal = document.getElementById('sync-modal');
+  if (modal) modal.remove();
+}
+
+async function viewStoreInventory() {
+  closeSyncModal();
+  
+  const content = document.getElementById('products-content');
+  content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading inventory from store...</p>';
+  
   try {
-    showNotification('info', 'Starting product sync...');
+    const products = await apiCall(`/stores/${selectedStore.id}/products`);
+    displayStoreInventory(products);
+  } catch (error) {
+    console.error('Failed to load store inventory:', error);
+    content.innerHTML = `
+      <div class="empty-state-card">
+        <div class="empty-state-icon" style="color: var(--danger-color);">
+          <i class="fas fa-exclamation-circle"></i>
+        </div>
+        <h3>Error Loading Inventory</h3>
+        <p>${error.message || 'Failed to load inventory from store'}</p>
+      </div>
+    `;
+  }
+}
+
+function displayStoreInventory(products) {
+  const content = document.getElementById('products-content');
+  const currency = currentBusinessLocation?.currency || 'KES';
+  const storeName = selectedStore?.storeName || selectedStore?.storeUrl || 'Store';
+  const platform = selectedStore?.platform || 'Store';
+  const platformIcon = platform === 'shopify' ? 'fab fa-shopify' : 'fab fa-wordpress';
+  
+  if (products.length === 0) {
+    content.innerHTML = `
+      <div class="empty-state-card">
+        <div class="empty-state-icon">
+          <i class="fas fa-box-open"></i>
+        </div>
+        <h3>No Products Found</h3>
+        <p>This store doesn't have any products yet.</p>
+      </div>
+    `;
+    return;
+  }
+  
+  // Calculate inventory stats
+  const totalProducts = products.length;
+  const totalStock = products.reduce((sum, p) => sum + (parseInt(p.stock) || 0), 0);
+  const inStock = products.filter(p => (parseInt(p.stock) || 0) > 0).length;
+  const outOfStock = products.filter(p => (parseInt(p.stock) || 0) === 0).length;
+  const lowStock = products.filter(p => {
+    const stock = parseInt(p.stock) || 0;
+    return stock > 0 && stock <= 10;
+  }).length;
+
+  content.innerHTML = `
+    <div class="content-card">
+      <div class="card-header">
+        <h3><i class="${platformIcon}"></i> ${storeName} - Live Inventory</h3>
+        <span class="badge badge-info"><i class="fas fa-sync-alt"></i> Live from ${platform}</span>
+      </div>
+      
+      <div class="inventory-stats-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; padding: 15px; background: var(--gray-100); border-radius: 8px;">
+        <div class="inventory-stat" style="text-align: center;">
+          <div style="font-size: 24px; font-weight: bold; color: var(--primary-color);">${totalProducts}</div>
+          <div style="font-size: 12px; color: var(--gray-600);">Total Products</div>
+        </div>
+        <div class="inventory-stat" style="text-align: center;">
+          <div style="font-size: 24px; font-weight: bold; color: var(--success-color);">${totalStock}</div>
+          <div style="font-size: 12px; color: var(--gray-600);">Total Stock Units</div>
+        </div>
+        <div class="inventory-stat" style="text-align: center;">
+          <div style="font-size: 24px; font-weight: bold; color: var(--success-color);">${inStock}</div>
+          <div style="font-size: 12px; color: var(--gray-600);">In Stock</div>
+        </div>
+        <div class="inventory-stat" style="text-align: center;">
+          <div style="font-size: 24px; font-weight: bold; color: ${outOfStock > 0 ? 'var(--danger-color)' : 'var(--gray-500)'};">${outOfStock}</div>
+          <div style="font-size: 12px; color: var(--gray-600);">Out of Stock</div>
+        </div>
+      </div>
+      
+      ${lowStock > 0 ? `
+        <div class="alert alert-warning" style="margin-bottom: 15px; padding: 10px 15px; background: #fff3cd; border-left: 4px solid var(--warning-color); border-radius: 4px;">
+          <i class="fas fa-exclamation-triangle"></i> <strong>${lowStock}</strong> product(s) have low stock (≤10 units)
+        </div>
+      ` : ''}
+      
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Product Name</th>
+              <th>SKU</th>
+              <th>Price</th>
+              <th>Stock Level</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${products.map(product => {
+              const stock = parseInt(product.stock) || 0;
+              let stockClass = 'stock-in';
+              let stockStatus = 'In Stock';
+              if (stock === 0) {
+                stockClass = 'stock-out';
+                stockStatus = 'Out of Stock';
+              } else if (stock <= 10) {
+                stockClass = 'stock-low';
+                stockStatus = 'Low Stock';
+              }
+              
+              return `
+                <tr>
+                  <td>
+                    <div class="product-cell">
+                      <div class="product-icon"><i class="fas fa-cube"></i></div>
+                      <strong>${product.name || product.title || 'Untitled Product'}</strong>
+                    </div>
+                  </td>
+                  <td><code class="sku-code">${product.sku || 'N/A'}</code></td>
+                  <td><strong class="price-text">${currency} ${parseFloat(product.price || 0).toLocaleString()}</strong></td>
+                  <td>
+                    <span class="stock-badge ${stockClass}">
+                      ${stock} units
+                    </span>
+                  </td>
+                  <td><span class="status-badge status-${stock === 0 ? 'danger' : stock <= 10 ? 'warning' : 'success'}">${stockStatus}</span></td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      
+      <div style="margin-top: 15px; text-align: center;">
+        <button onclick="syncStoreProducts()" class="btn-secondary">
+          <i class="fas fa-sync-alt"></i> More Sync Options
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+async function syncInventoryFromProkip() {
+  closeSyncModal();
+  
+  try {
+    showNotification('info', 'Syncing inventory from Prokip...');
+    const res = await apiCall('/sync/inventory', {
+      method: 'POST',
+      body: JSON.stringify({
+        connectionId: selectedStore.id
+      })
+    });
+    
+    if (res.success) {
+      showNotification('success', res.message || 'Inventory sync completed successfully');
+      setTimeout(() => viewStoreInventory(), 2000);
+    } else {
+      showNotification('error', res.error || 'Failed to sync inventory');
+    }
+  } catch (error) {
+    console.error('Inventory sync error:', error);
+    showNotification('error', 'Error syncing inventory: ' + (error.message || 'Unknown error'));
+  }
+}
+
+async function pushProductsToProkip() {
+  closeSyncModal();
+  
+  try {
+    showNotification('info', 'Pushing products from Prokip to store...');
     const res = await apiCall('/setup/products', {
       method: 'POST',
       body: JSON.stringify({
@@ -1419,17 +1814,15 @@ async function syncStoreProducts() {
       })
     });
     
-    if (res.ok) {
-      const data = await res.json();
-      showNotification('success', data.message || 'Product sync completed successfully');
-      setTimeout(() => loadStoreProducts(), 2000);
+    if (res.success) {
+      showNotification('success', res.message || 'Products pushed successfully');
+      setTimeout(() => viewStoreInventory(), 2000);
     } else {
-      const error = await res.json();
-      showNotification('error', error.error || 'Failed to sync products');
+      showNotification('error', res.error || 'Failed to push products');
     }
   } catch (error) {
-    console.error('Sync error:', error);
-    showNotification('error', 'Error starting product sync');
+    console.error('Product push error:', error);
+    showNotification('error', 'Error pushing products: ' + (error.message || 'Unknown error'));
   }
 }
 
@@ -1494,15 +1887,39 @@ async function loadStoreSales() {
     return;
   }
 
+  const salesList = document.getElementById('sales-list');
+  salesList.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading sales...</p>';
+
   try {
-    showNotification('info', 'Loading sales...');
-    const sales = await apiCall(`/stores/${selectedStore.id}/sales`);
+    // First, try to get sales from the store via orders
+    const orders = await apiCall(`/stores/${selectedStore.id}/orders`);
+    
+    // Convert orders to sales format with source info
+    const storeName = selectedStore.storeName || selectedStore.storeUrl;
+    const sales = orders.map(order => ({
+      id: order.orderId || order.id,
+      orderId: order.orderId || order.id,
+      date: order.date || order.created_at,
+      customer: order.customer || order.customer_name || 'Guest',
+      customerName: order.customer || order.customer_name || 'Guest',
+      productCount: order.items?.length || 1,
+      items: order.items?.length || 1,
+      quantitySold: order.items?.reduce((sum, item) => sum + (item.quantity || 1), 0) || 1,
+      total: parseFloat(order.total || 0),
+      status: order.status || 'completed',
+      source: 'store' // Mark as store sale
+    }));
     
     displayStoreSales(sales);
-    updateSalesStats(sales);
   } catch (error) {
     console.error('Failed to load sales:', error);
-    showNotification('error', 'Failed to load sales');
+    salesList.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-exclamation-triangle"></i>
+        <p>Failed to load sales</p>
+        <small>${error.message || 'Please check your connection and try again'}</small>
+      </div>
+    `;
   }
 }
 
@@ -1520,7 +1937,21 @@ function displayStoreSales(sales) {
     return;
   }
 
+  const currency = currentBusinessLocation?.currency || 'KES';
+  const storeName = selectedStore?.storeName || selectedStore?.storeUrl || 'Store';
+  const totalSalesAmount = sales.reduce((sum, sale) => sum + parseFloat(sale.total || 0), 0);
+
   salesList.innerHTML = `
+    <div class="sales-summary">
+      <div class="summary-card">
+        <span class="summary-label">Total Sales</span>
+        <span class="summary-value">${sales.length}</span>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">Total Revenue</span>
+        <span class="summary-value">${currency} ${totalSalesAmount.toLocaleString()}</span>
+      </div>
+    </div>
     <div class="table-responsive">
       <table class="data-table">
         <thead>
@@ -1529,28 +1960,31 @@ function displayStoreSales(sales) {
             <th>Date</th>
             <th>Customer</th>
             <th>Products</th>
+            <th>Qty Sold</th>
             <th>Total</th>
             <th>Status</th>
-            <th>Actions</th>
+            <th>Source</th>
           </tr>
         </thead>
         <tbody>
           ${sales.map(sale => `
             <tr>
               <td><code>${sale.orderId || sale.id}</code></td>
-              <td>${new Date(sale.date).toLocaleDateString()}</td>
-              <td>${sale.customer || 'Guest'}</td>
-              <td>${sale.productCount || 0} items</td>
-              <td>$${(sale.total || 0).toFixed(2)}</td>
+              <td>${new Date(sale.date || sale.created_at).toLocaleDateString()}</td>
+              <td>${sale.customer || sale.customerName || 'Guest'}</td>
+              <td>${sale.productCount || sale.items || 1} item(s)</td>
+              <td>${sale.quantitySold || sale.productCount || 1}</td>
+              <td><strong>${currency} ${parseFloat(sale.total || 0).toLocaleString()}</strong></td>
               <td>
-                <span class="badge ${getStatusClass(sale.status)}">
+                <span class="badge ${getStatusBadgeClass(sale.status)}">
                   ${sale.status || 'completed'}
                 </span>
               </td>
               <td>
-                <button onclick="viewSaleDetails('${sale.id}')" class="btn-small btn-primary">
-                  <i class="fas fa-eye"></i> View
-                </button>
+                <span class="source-badge ${sale.source === 'prokip' ? 'prokip' : 'store'}">
+                  <i class="fas fa-${sale.source === 'prokip' ? 'store' : 'globe'}"></i> 
+                  ${sale.source === 'prokip' ? (currentBusinessLocation?.name || 'Prokip') : storeName}
+                </span>
               </td>
             </tr>
           `).join('')}
@@ -1564,22 +1998,16 @@ function updateSalesStats(sales) {
   const totalSales = sales.reduce((sum, sale) => sum + (sale.total || 0), 0);
   const salesCount = sales.length;
   const lastSync = sales.length > 0 
-    ? new Date(Math.max(...sales.map(s => new Date(sale.date)))).toLocaleString()
+    ? new Date(Math.max(...sales.map(s => new Date(s.date || s.created_at)))).toLocaleString()
     : 'Never';
 
-  document.getElementById('total-sales').textContent = `$${totalSales.toFixed(2)}`;
-  document.getElementById('sales-count').textContent = salesCount;
-  document.getElementById('last-sync').textContent = lastSync;
-}
-
-function getStatusClass(status) {
-  switch (status?.toLowerCase()) {
-    case 'completed': return 'badge-success';
-    case 'processing': return 'badge-warning';
-    case 'pending': return 'badge-info';
-    case 'cancelled': return 'badge-danger';
-    default: return 'badge-secondary';
-  }
+  const totalSalesEl = document.getElementById('total-sales');
+  const salesCountEl = document.getElementById('sales-count');
+  const lastSyncEl = document.getElementById('last-sync');
+  
+  if (totalSalesEl) totalSalesEl.textContent = `${currentBusinessLocation?.currency || 'KES'} ${totalSales.toLocaleString()}`;
+  if (salesCountEl) salesCountEl.textContent = salesCount;
+  if (lastSyncEl) lastSyncEl.textContent = lastSync;
 }
 
 function viewSaleDetails(saleId) {
@@ -1997,16 +2425,20 @@ async function loadProkipProducts() {
       </div>
     `;
 
-    // Fetch products from setup route (which gets from Prokip)
-    const response = await apiCall('/setup/products', 'GET');
+    // Fetch products from prokip route
+    const response = await apiCall('/prokip/products', 'GET');
 
-    if (response.data && response.data.length > 0) {
-      let html = '';
+    if (response.products && response.products.length > 0) {
+      let html = '<div class="products-grid">';
 
-      response.data.forEach(product => {
-        const sellPrice = product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || '0.00';
-        const quantity = product.product_variations?.[0]?.variations?.[0]?.variation_location_details?.[0]?.qty_available || '0';
-        const sku = product.sku;
+      response.products.forEach(product => {
+        // Get price and stock from the product data structure
+        const variation = product.product_variations?.[0]?.variations?.[0];
+        const sellPrice = variation?.sell_price_inc_tax || product.sell_price_inc_tax || '0.00';
+        const locationDetails = variation?.variation_location_details?.[0];
+        const quantity = locationDetails?.qty_available || product.qty_available || '0';
+        const currency = product.currency || currentBusinessLocation?.currency || 'KES';
+        const sku = product.sku || 'N/A';
 
         html += `
           <div class="product-item">
@@ -2017,35 +2449,28 @@ async function loadProkipProducts() {
               <div class="product-name">${product.name}</div>
               <div class="product-meta">
                 <span class="product-price">
-                  <i class="fas fa-tag"></i> $${sellPrice}
+                  <i class="fas fa-tag"></i> ${currency} ${parseFloat(sellPrice).toLocaleString()}
                 </span>
-                <span class="product-stock">
-                  <i class="fas fa-warehouse"></i> ${quantity} in stock
+                <span class="product-stock ${parseFloat(quantity) > 0 ? 'in-stock' : 'out-of-stock'}">
+                  <i class="fas fa-warehouse"></i> ${parseFloat(quantity).toLocaleString()} in stock
                 </span>
                 <span class="product-sku">
                   <i class="fas fa-hashtag"></i> ${sku}
                 </span>
               </div>
             </div>
-            <div class="product-actions">
-              <button class="btn-small" onclick="viewProductDetails(${product.id})" title="View Details">
-                <i class="fas fa-eye"></i> View
-              </button>
-              <button class="btn-small" onclick="editProduct(${product.id})" title="Edit Product">
-                <i class="fas fa-edit"></i> Edit
-              </button>
-            </div>
           </div>
         `;
       });
 
+      html += '</div>';
       productsList.innerHTML = html;
     } else {
       productsList.innerHTML = `
         <div class="empty-state">
           <i class="fas fa-boxes"></i>
           <p>No products found in Prokip</p>
-          <small>Create your first product using the "Create Product" button above</small>
+          <small>Add products through your Prokip account</small>
         </div>
       `;
     }
@@ -2061,16 +2486,182 @@ async function loadProkipProducts() {
   }
 }
 
-// View product details (placeholder for future implementation)
-function viewProductDetails(productId) {
-  showNotification('info', `Viewing details for product ID: ${productId}`);
-  // TODO: Implement detailed product view modal
+// Load and display Prokip sales
+async function loadProkipSales() {
+  const salesList = document.getElementById('prokip-sales-list');
+
+  try {
+    // Show loading state
+    salesList.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-spinner fa-spin"></i>
+        <p>Loading sales...</p>
+      </div>
+    `;
+
+    // Fetch sales from prokip route
+    const response = await apiCall('/prokip/sales', 'GET');
+
+    if (response.sales && response.sales.length > 0) {
+      const currency = currentBusinessLocation?.currency || 'KES';
+      
+      let html = `
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Invoice #</th>
+                <th>Date</th>
+                <th>Customer</th>
+                <th>Products</th>
+                <th>Total</th>
+                <th>Status</th>
+                <th>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      response.sales.forEach(sale => {
+        const invoiceNo = sale.invoice_no || sale.ref_no || 'N/A';
+        const date = sale.transaction_date ? new Date(sale.transaction_date).toLocaleDateString() : 'N/A';
+        const customer = sale.contact?.name || sale.customer_name || 'Walk-in';
+        const productCount = sale.sell_lines?.length || 0;
+        const total = parseFloat(sale.final_total || 0).toLocaleString();
+        const status = sale.status || 'completed';
+        const source = sale.added_by || 'Prokip POS';
+
+        html += `
+          <tr>
+            <td><code>${invoiceNo}</code></td>
+            <td>${date}</td>
+            <td>${customer}</td>
+            <td>${productCount} item(s)</td>
+            <td><strong>${currency} ${total}</strong></td>
+            <td><span class="badge ${getStatusBadgeClass(status)}">${status}</span></td>
+            <td><span class="source-badge prokip"><i class="fas fa-store"></i> ${source}</span></td>
+          </tr>
+        `;
+      });
+
+      html += '</tbody></table></div>';
+      salesList.innerHTML = html;
+    } else {
+      salesList.innerHTML = `
+        <div class="empty-state">
+          <i class="fas fa-cash-register"></i>
+          <p>No sales found</p>
+          <small>Sales from your Prokip account will appear here</small>
+        </div>
+      `;
+    }
+  } catch (error) {
+    console.error('Error loading Prokip sales:', error);
+    salesList.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-exclamation-triangle"></i>
+        <p>Failed to load sales</p>
+        <small>${error.message || 'Please check your connection and try again'}</small>
+      </div>
+    `;
+  }
 }
 
-// Edit product (placeholder for future implementation)
-function editProduct(productId) {
-  showNotification('info', `Editing product ID: ${productId}`);
-  // TODO: Implement product editing functionality
+// Load and display Prokip purchases
+async function loadProkipPurchases() {
+  const purchasesList = document.getElementById('prokip-purchases-list');
+
+  try {
+    // Show loading state
+    purchasesList.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-spinner fa-spin"></i>
+        <p>Loading purchases...</p>
+      </div>
+    `;
+
+    // Fetch purchases from prokip route
+    const response = await apiCall('/prokip/purchases', 'GET');
+
+    if (response.purchases && response.purchases.length > 0) {
+      const currency = currentBusinessLocation?.currency || 'KES';
+      
+      let html = `
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Reference #</th>
+                <th>Date</th>
+                <th>Supplier</th>
+                <th>Items</th>
+                <th>Total</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      response.purchases.forEach(purchase => {
+        const refNo = purchase.ref_no || purchase.reference_no || 'N/A';
+        const date = purchase.transaction_date ? new Date(purchase.transaction_date).toLocaleDateString() : 'N/A';
+        const supplier = purchase.contact?.name || purchase.supplier_name || 'Unknown';
+        const itemCount = purchase.purchase_lines?.length || 0;
+        const total = parseFloat(purchase.final_total || 0).toLocaleString();
+        const status = purchase.status || 'received';
+
+        html += `
+          <tr>
+            <td><code>${refNo}</code></td>
+            <td>${date}</td>
+            <td>${supplier}</td>
+            <td>${itemCount} item(s)</td>
+            <td><strong>${currency} ${total}</strong></td>
+            <td><span class="badge ${getStatusBadgeClass(status)}">${status}</span></td>
+          </tr>
+        `;
+      });
+
+      html += '</tbody></table></div>';
+      purchasesList.innerHTML = html;
+    } else {
+      purchasesList.innerHTML = `
+        <div class="empty-state">
+          <i class="fas fa-shopping-bag"></i>
+          <p>No purchases found</p>
+          <small>Purchases from your Prokip account will appear here</small>
+        </div>
+      `;
+    }
+  } catch (error) {
+    console.error('Error loading Prokip purchases:', error);
+    purchasesList.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-exclamation-triangle"></i>
+        <p>Failed to load purchases</p>
+        <small>${error.message || 'Please check your connection and try again'}</small>
+      </div>
+    `;
+  }
+}
+
+// Helper function for status badge classes
+function getStatusBadgeClass(status) {
+  switch (status?.toLowerCase()) {
+    case 'completed':
+    case 'final':
+    case 'received':
+    case 'paid':
+      return 'badge-success';
+    case 'pending':
+    case 'ordered':
+      return 'badge-warning';
+    case 'cancelled':
+    case 'refunded':
+      return 'badge-danger';
+    default:
+      return 'badge-secondary';
+  }
 }
 
 // Close dropdown when clicking outside

@@ -16,6 +16,14 @@ const { processStoreToProkip } = require('../services/syncService');
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// Track used OAuth codes to prevent duplicate processing
+const usedOAuthCodes = new Set();
+
+// Clean up old codes every 5 minutes (codes expire after use anyway)
+setInterval(() => {
+  usedOAuthCodes.clear();
+}, 5 * 60 * 1000);
+
 // Helper function to normalize Shopify store URL
 function normalizeShopifyUrl(storeUrl) {
   // Remove any protocol
@@ -117,6 +125,13 @@ router.get('/callback/shopify', async (req, res) => {
     console.error('Missing OAuth parameters');
     return res.redirect('/?shopify_error=Missing authorization parameters');
   }
+
+  // Prevent duplicate processing of the same code
+  if (usedOAuthCodes.has(code)) {
+    console.log('OAuth code already processed, redirecting to success');
+    return res.redirect('/?success=Shopify+connected');
+  }
+  usedOAuthCodes.add(code);
 
   try {
     // Exchange code for access token

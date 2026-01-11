@@ -8,28 +8,35 @@
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body>
-  <!-- Login Screen -->
+  <!-- Prokip Login Screen -->
   <div id="login-screen" class="login-screen">
     <div class="login-container">
       <div class="login-header">
         <img src="/prokip_logo.png" alt="Prokip Logo" class="logo">
         <h1>Welcome to Prokip</h1>
-        <p>Connect your e-commerce stores and manage inventory seamlessly</p>
+        <p>Sign in with your Prokip account to manage your e-commerce integration</p>
       </div>
 
       <div class="login-form">
         <div class="form-group">
-          <label for="username">Username</label>
-          <input type="text" id="username" placeholder="Enter your username" />
+          <label for="prokip-username">Prokip Username</label>
+          <input type="text" id="prokip-username" placeholder="Enter your Prokip username" />
         </div>
 
         <div class="form-group">
-          <label for="password">Password</label>
-          <input type="password" id="password" placeholder="Enter your password" />
+          <label for="prokip-password">Password</label>
+          <input type="password" id="prokip-password" placeholder="Enter your password" />
         </div>
 
-        <button onclick="login()" class="btn-primary">Sign In</button>
+        <button onclick="loginToProkip()" class="btn-primary" id="login-btn">
+          <span id="login-btn-text">Sign In to Prokip</span>
+          <i id="login-spinner" class="fas fa-spinner fa-spin" style="display: none;"></i>
+        </button>
         <p id="login-error" class="error-message"></p>
+        
+        <div class="login-info">
+          <p><i class="fas fa-lock"></i> Your credentials are securely sent to Prokip. We never store your password.</p>
+        </div>
       </div>
     </div>
   </div>
@@ -40,7 +47,7 @@
       <div class="location-header">
         <img src="/prokip_logo.png" alt="Prokip Logo" class="logo">
         <h1>Select Business Location</h1>
-        <p>Choose which business location you want to work with</p>
+        <p>Choose which business location you want to sync with your online stores</p>
       </div>
 
       <div id="locations-grid" class="locations-grid">
@@ -48,7 +55,7 @@
       </div>
 
       <div class="location-footer">
-        <button onclick="logout()" class="btn-secondary">
+        <button onclick="logoutFromProkip()" class="btn-secondary">
           <i class="fas fa-sign-out-alt"></i> Logout
         </button>
       </div>
@@ -80,7 +87,7 @@
       
       <!-- Store-specific menu items (hidden initially) -->
       <div id="store-menu-section" style="display: none;">
-        <div class="menu-section-title">Current Store</div>
+        <div class="menu-section-title" id="store-menu-title">Connected Store</div>
         <ul class="sidebar-menu">
           <li class="menu-item" data-page="store-products" onclick="navigateTo('store-products')">
             <i class="fas fa-box"></i>
@@ -412,58 +419,14 @@
       <div id="prokip-operations-page" class="page">
         <div class="page-header">
           <h1>Prokip Operations</h1>
-          <p>Create products, record sales, and manage purchases in Prokip</p>
+          <p>View your products, sales, and purchases from Prokip</p>
         </div>
 
         <div class="prokip-operations-content">
-          <div class="operations-grid">
-            <!-- Create Product Card -->
-            <div class="operation-card">
-              <div class="operation-icon">
-                <i class="fas fa-box-open"></i>
-              </div>
-              <div class="operation-info">
-                <h3>Create Product</h3>
-                <p>Add a new product to your Prokip inventory and sync it to all connected stores</p>
-              </div>
-              <button onclick="openCreateProductModal()" class="btn-primary">
-                <i class="fas fa-plus"></i> Create Product
-              </button>
-            </div>
-
-            <!-- Record Sale Card -->
-            <div class="operation-card">
-              <div class="operation-icon">
-                <i class="fas fa-cash-register"></i>
-              </div>
-              <div class="operation-info">
-                <h3>Record Sale</h3>
-                <p>Record a sale transaction in Prokip and reduce inventory in connected stores</p>
-              </div>
-              <button onclick="openRecordSaleModal()" class="btn-primary">
-                <i class="fas fa-plus"></i> Record Sale
-              </button>
-            </div>
-
-            <!-- Record Purchase Card -->
-            <div class="operation-card">
-              <div class="operation-icon">
-                <i class="fas fa-shopping-bag"></i>
-              </div>
-              <div class="operation-info">
-                <h3>Record Purchase</h3>
-                <p>Record an inventory purchase from a supplier and update stock in connected stores</p>
-              </div>
-              <button onclick="openRecordPurchaseModal()" class="btn-primary">
-                <i class="fas fa-plus"></i> Record Purchase
-              </button>
-            </div>
-          </div>
-
-          <!-- Products List -->
+          <!-- Products Section -->
           <div class="products-section">
             <div class="section-header">
-              <h2>Products in Prokip</h2>
+              <h2><i class="fas fa-boxes"></i> Products in Prokip</h2>
               <button onclick="loadProkipProducts()" class="btn-secondary">
                 <i class="fas fa-sync"></i> Refresh
               </button>
@@ -476,13 +439,34 @@
             </div>
           </div>
 
-          <!-- Recent Operations -->
-          <div class="recent-operations">
-            <h2>Recent Operations</h2>
-            <div id="recent-operations-list" class="operations-list">
+          <!-- Sales Section -->
+          <div class="sales-section">
+            <div class="section-header">
+              <h2><i class="fas fa-cash-register"></i> Recent Sales</h2>
+              <button onclick="loadProkipSales()" class="btn-secondary">
+                <i class="fas fa-sync"></i> Refresh
+              </button>
+            </div>
+            <div id="prokip-sales-list" class="sales-list">
               <div class="empty-state">
-                <i class="fas fa-clipboard-list"></i>
-                <p>No operations recorded yet</p>
+                <i class="fas fa-cash-register"></i>
+                <p>Loading sales...</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Purchases Section -->
+          <div class="purchases-section">
+            <div class="section-header">
+              <h2><i class="fas fa-shopping-bag"></i> Recent Purchases</h2>
+              <button onclick="loadProkipPurchases()" class="btn-secondary">
+                <i class="fas fa-sync"></i> Refresh
+              </button>
+            </div>
+            <div id="prokip-purchases-list" class="purchases-list">
+              <div class="empty-state">
+                <i class="fas fa-shopping-bag"></i>
+                <p>Loading purchases...</p>
               </div>
             </div>
           </div>

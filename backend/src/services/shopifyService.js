@@ -11,16 +11,14 @@ const getShopifyBaseUrl = (shop) => {
 async function registerShopifyWebhooks(shop, accessToken) {
   const webhookUrl = process.env.WEBHOOK_URL || `http://localhost:${process.env.PORT}/webhook/shopify`;
   
-  // Register both product and order webhooks
-  // Note: refunds/create requires protected customer data access - use orders/updated instead
+  // Register product and inventory webhooks only
+  // Note: Order webhooks (orders/create, orders/paid, orders/cancelled, orders/updated)
+  // require Protected Customer Data access approval from Shopify
+  // See: https://shopify.dev/docs/apps/launch/protected-customer-data
   const topics = [
     'products/update', 
     'products/create', 
-    'inventory_levels/update',
-    'orders/create',      // Order created event
-    'orders/paid',        // Order payment confirmed
-    'orders/cancelled',   // Order cancelled
-    'orders/updated'      // Order updated (includes refunds)
+    'inventory_levels/update'
   ];
 
   // First, clean up existing webhooks with the same address
@@ -71,13 +69,20 @@ async function cleanupExistingWebhooks(shop, accessToken, webhookUrl) {
 async function getShopifyProducts(shop, accessToken) {
   try {
     const baseUrl = getShopifyBaseUrl(shop);
+    console.log(`🔍 Shopify API call: ${baseUrl}/admin/api/2026-01/products.json`);
+    console.log(`🔑 Access token present: ${accessToken ? 'Yes' : 'No'}`);
+    
     const response = await axios.get(`${baseUrl}/admin/api/2026-01/products.json`, {
       headers: { 'X-Shopify-Access-Token': accessToken }
     });
+    
+    console.log(`📦 Shopify response: ${response.data?.products?.length || 0} products`);
     return response.data.products;
   } catch (error) {
     const message = error.response?.data?.errors || error.message;
-    console.error('Failed to get Shopify products:', message);
+    console.error('❌ Failed to get Shopify products:', message);
+    console.error('   Status:', error.response?.status);
+    console.error('   Data:', JSON.stringify(error.response?.data || {}));
     throw new Error(`Shopify API Error: ${message}`);
   }
 }
@@ -105,16 +110,65 @@ async function createShopifyProduct(shop, accessToken, product) {
   }
 }
 
-async function updateShopifyInventory(shop, accessToken, inventoryItemId, locationId, available) {
+/**
+ * Enable inventory tracking for a Shopify inventory item
+ */
+async function enableInventoryTracking(shop, accessToken, inventoryItemId) {
   try {
     const baseUrl = getShopifyBaseUrl(shop);
-    await axios.post(`${baseUrl}/admin/api/2026-01/inventory_levels/set.json`, {
-      location_id: locationId,
-      inventory_item_id: inventoryItemId,
-      available
+    await axios.put(`${baseUrl}/admin/api/2026-01/inventory_items/${inventoryItemId}.json`, {
+      inventory_item: {
+        id: inventoryItemId,
+        tracked: true
+      }
     }, {
       headers: { 'X-Shopify-Access-Token': accessToken }
     });
+    return true;
+  } catch (error) {
+    console.error('Failed to enable inventory tracking:', error.response?.data || error.message);
+    return false;
+  }
+}
+
+async function updateShopifyInventory(shop, accessToken, inventoryItemId, locationId, available) {
+  try {
+    const baseUrl = getShopifyBaseUrl(shop);
+    
+    // First, try to set the inventory level
+    try {
+      await axios.post(`${baseUrl}/admin/api/2026-01/inventory_levels/set.json`, {
+        location_id: locationId,
+        inventory_item_id: inventoryItemId,
+        available
+      }, {
+        headers: { 'X-Shopify-Access-Token': accessToken }
+      });
+    } catch (invError) {
+      // Check if error is about inventory tracking not being enabled
+      const errorMsg = JSON.stringify(invError.response?.data?.errors || '');
+      if (errorMsg.includes('tracking') || errorMsg.includes('tracked')) {
+        console.log(`Enabling inventory tracking for item ${inventoryItemId}...`);
+        
+        // Enable inventory tracking
+        const trackingEnabled = await enableInventoryTracking(shop, accessToken, inventoryItemId);
+        if (!trackingEnabled) {
+          throw new Error('Failed to enable inventory tracking');
+        }
+        
+        // Retry setting inventory level
+        await axios.post(`${baseUrl}/admin/api/2026-01/inventory_levels/set.json`, {
+          location_id: locationId,
+          inventory_item_id: inventoryItemId,
+          available
+        }, {
+          headers: { 'X-Shopify-Access-Token': accessToken }
+        });
+        console.log(`✓ Inventory tracking enabled and level set for item ${inventoryItemId}`);
+      } else {
+        throw invError;
+      }
+    }
   } catch (error) {
     console.error('Failed to update Shopify inventory:', error.response?.data || error.message);
     throw new Error('Unable to update inventory in Shopify');

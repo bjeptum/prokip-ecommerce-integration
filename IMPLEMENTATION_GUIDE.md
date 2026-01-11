@@ -8,14 +8,14 @@ This guide covers the backend implementation of the Prokip E-commerce Integratio
 
 ## Architecture
 
-### Technology Stack
+### System Overview
 
 ```
 ┌─────────────────────────────────────────────────┐
 │              Frontend Dashboard                  │
 │         (HTML/CSS/JavaScript)                    │
 └──────────────────┬──────────────────────────────┘
-                   │ HTTPS/JWT
+                   │ HTTP/REST
                    ▼
 ┌─────────────────────────────────────────────────┐
 │           Express.js Backend                     │
@@ -27,14 +27,14 @@ This guide covers the backend implementation of the Prokip E-commerce Integratio
                    ▼
 ┌─────────────────────────────────────────────────┐
 │         PostgreSQL Database                      │
-│   User | Connection | InventoryCache             │
-│   SalesLog | ProkipConfig                        │
+│   users | connections | inventory_logs           │
+│   sales_logs | webhook_events | prokip_config    │
 └─────────────────────────────────────────────────┘
          │               │               │
          ▼               ▼               ▼
 ┌──────────────┐ ┌────────────┐ ┌──────────────┐
 │ Shopify API  │ │ WooCommerce│ │  Prokip API  │
-│   (OAuth)    │ │   (REST)   │ │   (Bearer)   │
+│   (OAuth)    │ │   (REST)   │ │   (OAuth)    │
 └──────────────┘ └────────────┘ └──────────────┘
 ```
 
@@ -43,31 +43,35 @@ This guide covers the backend implementation of the Prokip E-commerce Integratio
 ```
 backend/
 ├── src/
-│   ├── app.js                  # Express application entry point
+│   ├── app.js                      # Express application entry point
 │   ├── routes/
-│   │   ├── authRoutes.js       # Login/register endpoints
-│   │   ├── connectionRoutes.js # Store connection management
-│   │   ├── setupRoutes.js      # Product setup and mapping
-│   │   ├── syncRoutes.js       # Sync control and status
-│   │   └── webhookRoutes.js    # Webhook receivers
+│   │   ├── authRoutes.js           # Prokip authentication endpoints
+│   │   ├── connectionRoutes.js     # Store connection management
+│   │   ├── prokipRoutes.js         # Prokip API operations
+│   │   ├── storeRoutes.js          # Store data endpoints
+│   │   ├── syncRoutes.js           # Sync control and operations
+│   │   ├── setupRoutes.js          # Product setup and mapping
+│   │   └── webhookRoutes.js        # Webhook receivers
 │   ├── services/
-│   │   ├── shopifyService.js   # Shopify API integration
-│   │   ├── wooService.js       # WooCommerce API integration
-│   │   ├── prokipMapper.js     # Prokip API integration
-│   │   ├── storeService.js     # Store operations
-│   │   └── syncService.js      # Sync logic
+│   │   ├── prokipService.js        # Prokip API integration
+│   │   ├── shopifyService.js       # Shopify API integration
+│   │   ├── wooService.js           # WooCommerce API integration
+│   │   ├── wooAppPasswordService.js # WooCommerce App Password auth
+│   │   ├── storeService.js         # Store operations
+│   │   └── syncService.js          # Sync logic
 │   └── middlewares/
-│       └── authMiddleware.js   # JWT validation
+│       └── authMiddleware.js       # JWT validation
 ├── prisma/
-│   ├── schema.prisma           # Database schema
-│   └── migrations/             # Migration history
-├── tests/
-│   └── mock-servers.js         # Mock API servers
+│   ├── schema.prisma               # Database schema
+│   └── migrations/                 # Migration history
 ├── lib/
-│   ├── prisma.js               # Prisma client instance
-│   └── validation.js           # Input validators
-├── .env                        # Environment configuration
-└── package.json                # Dependencies
+│   ├── prisma.js                   # Prisma client instance
+│   └── validation.js               # Input validators
+├── tests/
+│   ├── mock-prokip-api.js          # Mock Prokip server
+│   └── Postman-Collection.json     # API test collection
+├── .env                            # Environment configuration
+└── package.json                    # Dependencies
 ```
 
 ---
@@ -75,570 +79,437 @@ backend/
 ## Database Schema
 
 ### User Table
-Stores authentication credentials for dashboard access.
+Stores user accounts (currently used for basic auth, Prokip login is separate).
 
 ```prisma
 model User {
-  id       Int    @id @default(autoincrement())
-  username String @unique
-  password String  // bcrypt hashed
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  password  String   // bcrypt hashed
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  connections Connection[]
 }
 ```
-
-**Usage:**
-- Login to dashboard
-- API authentication via JWT
 
 ### Connection Table
 Stores e-commerce store connections with platform-specific credentials.
 
 ```prisma
 model Connection {
-  id             Int              @id @default(autoincrement())
-  platform       String           // 'shopify' or 'woocommerce'
-  storeUrl       String
-  accessToken    String?          // Shopify OAuth token
-  consumerKey    String?          // WooCommerce key
-  consumerSecret String?          // WooCommerce secret
-  lastSync       DateTime?
-  syncEnabled    Boolean          @default(true)
-  InventoryCache InventoryCache[]
-  SalesLog       SalesLog[]
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  platform        String   // 'shopify' or 'woocommerce'
+  storeUrl        String
+  storeName       String?
   
-  @@unique([platform, storeUrl])  // Allow same URL for different platforms
+  // Shopify OAuth
+  accessToken     String?
+  accessTokenSecret String?
+  
+  // WooCommerce API Keys (encrypted)
+  consumerKey     String?
+  consumerSecret  String?
+  
+  // WooCommerce Application Password
+  wooUsername     String?
+  wooAppPassword  String?
+  
+  // OAuth fields
+  oauthToken      String?
+  oauthSecret     String?
+  
+  lastSync        DateTime @default(now())
+  syncEnabled     Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  user            User @relation(fields: [userId], references: [id])
+  inventoryLogs   InventoryLog[]
+  salesLogs       SalesLog[]
+  webhookEvents   WebhookEvent[]
+  
+  @@unique([userId, platform, storeUrl])
 }
 ```
 
-**Relationships:**
-- One connection → Many inventory cache entries
-- One connection → Many sales logs
-
-### InventoryCache Table
-Tracks SKU-level inventory for each connected store.
+### InventoryLog Table
+Tracks inventory sync operations per SKU.
 
 ```prisma
-model InventoryCache {
-  id           Int        @id @default(autoincrement())
+model InventoryLog {
+  id           Int      @id @default(autoincrement())
   connectionId Int
-  sku          String
+  productId    String
+  productName  String
+  sku          String?
   quantity     Int
-  connection   Connection @relation(fields: [connectionId], references: [id])
+  price        Float
+  lastSynced   DateTime @default(now())
+  
+  connection   Connection @relation(...)
+  
+  @@unique([connectionId, sku])
 }
 ```
 
-**Purpose:**
-- Store inventory snapshots
-- Compare with Prokip inventory
-- Determine what needs syncing
-
 ### SalesLog Table
-Audit trail of all sales processed from stores.
+Audit trail of sales processed from stores.
 
 ```prisma
 model SalesLog {
-  id           Int        @id @default(autoincrement())
-  connectionId Int
-  orderId      String     // Store's order ID
-  prokipSellId String?    // Prokip's sale ID
-  timestamp    DateTime   @default(now())
-  connection   Connection @relation(fields: [connectionId], references: [id])
+  id            Int      @id @default(autoincrement())
+  connectionId  Int
+  orderId       String
+  orderNumber   String?
+  customerName  String?
+  customerEmail String?
+  totalAmount   Float
+  status        String?
+  orderDate     DateTime
+  syncedAt      DateTime @default(now())
+  
+  connection    Connection @relation(...)
 }
 ```
 
-**Purpose:**
-- Track processed orders
-- Prevent duplicate sales
-- Audit trail
+### WebhookEvent Table
+Logs all incoming webhooks for debugging and replay.
+
+```prisma
+model WebhookEvent {
+  id           Int       @id @default(autoincrement())
+  connectionId Int
+  eventType    String    // 'products/update', 'inventory_levels/update', etc.
+  payload      String    // JSON string
+  processed    Boolean   @default(false)
+  errorMessage String?
+  createdAt    DateTime  @default(now())
+  processedAt  DateTime?
+  
+  connection   Connection @relation(...)
+}
+```
 
 ### ProkipConfig Table
-Stores Prokip API credentials (singleton pattern).
+Stores Prokip authentication and configuration.
 
 ```prisma
 model ProkipConfig {
-  id         Int    @id @default(1)
-  token      String
-  apiUrl     String
-  locationId String
-}
-```
-
-**Purpose:**
-- Central Prokip API configuration
-- Used by all sync operations
-
----
-
-## API Endpoints
-
-### Authentication Routes
-**Base:** `/auth`
-
-#### POST /auth/register
-Create new user account.
-
-**Request:**
-```json
-{
-  "username": "admin",
-  "password": "password123"
-}
-```
-
-**Response:**
-```json
-{
-  "message": "User registered successfully"
-}
-```
-
-#### POST /auth/login
-Authenticate and receive JWT token.
-
-**Request:**
-```json
-{
-  "username": "admin",
-  "password": "password123"
-}
-```
-
-**Response:**
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "id": 1,
-    "username": "admin"
-  }
+  id           Int       @id @default(1)
+  token        String    // Access token
+  refreshToken String?   // Refresh token
+  expiresAt    DateTime? // Token expiry
+  apiUrl       String    // API base URL
+  locationId   String    // Selected business location
+  userId       Int       @default(1)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 ```
 
 ---
 
-### Connection Routes
-**Base:** `/connections`
+## API Routes
 
-#### POST /connections/shopify/initiate
-Start Shopify OAuth flow.
+### Authentication Routes (`authRoutes.js`)
 
-**Request:**
-```json
-{
-  "storeUrl": "mystore"  // or "mystore.myshopify.com"
-}
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/auth/prokip-login` | Authenticate with Prokip credentials |
+| POST | `/auth/prokip-location` | Set active business location |
+| GET | `/auth/prokip-locations` | Get user's business locations |
+| POST | `/auth/prokip-logout` | Clear Prokip authentication |
+| GET | `/auth/prokip-status` | Check authentication status |
 
-**Response:**
-```json
-{
-  "authUrl": "https://mystore.myshopify.com/admin/oauth/authorize?client_id=..."
-}
-```
+**Login Flow:**
+1. User submits username/password
+2. Backend calls Prokip OAuth token endpoint
+3. Token stored in `prokip_config`
+4. User selects business location
+5. Location ID stored, dashboard accessible
 
-**Frontend Action:** Redirect user to `authUrl`
+### Connection Routes (`connectionRoutes.js`)
 
-#### GET /connections/callback/shopify
-OAuth callback endpoint (Shopify redirects here).
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/connections` | List all store connections |
+| DELETE | `/connections/:id` | Remove a connection |
+| POST | `/connections/shopify/initiate` | Start Shopify OAuth flow |
+| GET | `/connections/callback/shopify` | Shopify OAuth callback |
+| POST | `/connections/woocommerce/connect` | Connect WooCommerce with App Password |
 
-**Query Parameters:**
-- `code` - Authorization code from Shopify
-- `shop` - Store domain
-- `error` - Error code (if user cancelled)
-- `error_description` - Error details
+**Shopify OAuth Flow:**
+1. Frontend calls `/connections/shopify/initiate` with store URL
+2. Backend returns authorization URL
+3. User authorizes in Shopify
+4. Shopify redirects to callback with auth code
+5. Backend exchanges code for access token
+6. Connection created, webhooks registered
 
-**Success:** Redirects to `/?shopify_success=true&store={shop}`
-**Error:** Redirects to `/?shopify_error={message}`
+**WooCommerce Connection:**
+1. User provides store URL, username, app password
+2. Backend validates credentials with test API call
+3. Connection created with credentials stored
 
-#### POST /connections/woocommerce
-Connect WooCommerce store.
+### Prokip Routes (`prokipRoutes.js`)
 
-**Request:**
-```json
-{
-  "storeUrl": "https://mystore.com",
-  "consumerKey": "ck_...",
-  "consumerSecret": "cs_..."
-}
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/prokip/products` | Get products from Prokip |
+| GET | `/prokip/inventory` | Get inventory levels |
+| GET | `/prokip/sales` | Get sales records |
+| GET | `/prokip/purchases` | Get purchase records |
+| POST | `/prokip/products` | Create product in Prokip |
+| POST | `/prokip/sales` | Record sale in Prokip |
+| POST | `/prokip/purchases` | Record purchase in Prokip |
 
-**Response:**
-```json
-{
-  "success": true
-}
-```
+### Store Routes (`storeRoutes.js`)
 
-#### POST /connections/prokip
-Configure Prokip API credentials.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/stores/:id/products` | Get products from connected store |
+| GET | `/stores/:id/orders` | Get orders from connected store |
+| GET | `/stores/:id/sales` | Get sales data from store |
 
-**Request:**
-```json
-{
-  "token": "Bearer xyz...",
-  "locationId": "1"
-}
-```
+### Sync Routes (`syncRoutes.js`)
 
-**Response:**
-```json
-{
-  "success": true
-}
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/sync/status` | Get overall sync status |
+| POST | `/sync/inventory` | Sync Prokip inventory to store |
+| POST | `/sync/products` | Sync products between systems |
 
-#### DELETE /connections/:id
-Disconnect a store.
-
-**Response:**
-```json
-{
-  "success": true
-}
-```
-
----
-
-### Sync Routes
-**Base:** `/sync`
-
-#### GET /sync/status
-Get all connections with sync status.
-
-**Response:**
-```json
-[
-  {
-    "id": 1,
-    "platform": "shopify",
-    "storeUrl": "mystore.myshopify.com",
-    "lastSync": "2026-01-05T10:30:00.000Z",
-    "syncEnabled": true,
-    "productCount": 45,
-    "orderCount": 123
-  }
-]
-```
-
-#### POST /sync
-Trigger manual sync for all stores.
-
-**Response:**
-```json
-{
-  "message": "Sync initiated for all stores"
-}
-```
-
-#### POST /sync/pull-orders
-Pull recent orders from stores to Prokip.
-
-**Response:**
-```json
-{
-  "message": "Orders pulled successfully",
-  "count": 5
-}
-```
-
-#### POST /sync/pause
-Pause automatic syncing.
-
-#### POST /sync/resume
-Resume automatic syncing.
-
----
-
-### Webhook Routes
-**Base:** `/connections/webhook`
-
-#### POST /connections/webhook/shopify
-Receive webhooks from Shopify.
-
-**Headers:**
-- `X-Shopify-Topic` - Event type (e.g., "orders/create")
-- `X-Shopify-Shop-Domain` - Store domain
-- `X-Shopify-Hmac-Sha256` - HMAC signature for verification
-
-**Body:** Raw JSON from Shopify
-
-**Supported Topics:**
-- `orders/create` - New order created
-- `orders/updated` - Order modified
-- `orders/cancelled` - Order cancelled
-- `products/update` - Product changed
-
-#### POST /connections/webhook/woocommerce
-Receive webhooks from WooCommerce.
-
-**Body:**
-```json
-{
-  "topic": "order.created",
-  "resource": {
-    // WooCommerce order data
-  }
-}
-```
+**Inventory Sync Process:**
+1. Get products from Prokip
+2. Get inventory levels from Prokip
+3. For each product with SKU:
+   - Find matching product in connected store
+   - Update inventory quantity
+   - Enable inventory tracking if needed (Shopify)
+   - Log sync operation
 
 ---
 
 ## Services
 
+### prokipService.js
+
+Handles all Prokip API interactions with OAuth token management.
+
+**Key Functions:**
+
+```javascript
+// Authentication
+authenticateUser(username, password) // Login with Prokip credentials
+refreshAccessToken(refreshToken)      // Refresh expired token
+saveProkipConfig(data, userId)        // Store token in database
+getValidToken()                       // Get valid token, refresh if needed
+getAuthHeaders()                      // Get headers with Bearer token
+
+// Business Operations
+getBusinessLocations()                // Get user's business locations
+getProducts()                         // Get all products
+getInventory()                        // Get inventory report
+getSales(locationId, startDate, endDate)      // Get sales
+getPurchases(locationId, startDate, endDate)  // Get purchases
+
+// CRUD Operations
+createProduct(productData)            // Create new product
+recordSale(saleData)                  // Record a sale
+recordPurchase(purchaseData)          // Record a purchase
+```
+
 ### shopifyService.js
-Handles all Shopify API interactions.
+
+Handles Shopify Admin API interactions.
 
 **Key Functions:**
 
 ```javascript
-// Register webhooks for a store
-async function registerShopifyWebhooks(shop, accessToken)
+// Products
+getShopifyProducts(shop, accessToken)
+createShopifyProduct(shop, accessToken, product)
 
-// Get all products from Shopify
-async function getShopifyProducts(shop, accessToken)
+// Inventory
+getShopifyLocations(shop, accessToken)
+updateShopifyInventory(shop, accessToken, inventoryItemId, locationId, quantity)
+enableInventoryTracking(shop, accessToken, inventoryItemId)
 
-// Create product in Shopify
-async function createShopifyProduct(shop, accessToken, product)
+// Orders
+getShopifyOrders(shop, accessToken, limit)
 
-// Update inventory quantity
-async function updateShopifyInventory(shop, accessToken, inventoryItemId, locationId, quantity)
-
-// Get store locations
-async function getShopifyLocations(shop, accessToken)
+// Webhooks
+registerShopifyWebhooks(shop, accessToken)
+cleanupExistingWebhooks(shop, accessToken, webhookUrl)
 ```
 
-**API Version:** 2026-01
-**Base URL Pattern:** `https://{shop}/admin/api/2026-01/`
+**Registered Webhooks:**
+- `products/update` - Product changes
+- `products/create` - New products
+- `inventory_levels/update` - Inventory changes
 
-### wooService.js
-Handles WooCommerce REST API integration.
+**Note:** Order webhooks (`orders/create`, `orders/paid`, etc.) require Protected Customer Data access from Shopify.
+
+### storeService.js
+
+Unified interface for store operations across platforms.
 
 **Key Functions:**
 
 ```javascript
-// Register webhooks
-async function registerWooWebhooks(storeUrl, consumerKey, consumerSecret)
-
-// Get products
-async function getWooProducts(storeUrl, consumerKey, consumerSecret)
-
-// Create product
-async function createWooProduct(storeUrl, consumerKey, consumerSecret, product)
-
-// Update inventory
-async function updateWooInventory(storeUrl, consumerKey, consumerSecret, productId, quantity)
+createProductInStore(connection, product)
+updateInventoryInStore(connection, sku, quantity)
+verifyWooCommerceConnection(storeUrl, username, appPassword)
 ```
 
-**Authentication:** Basic Auth (Base64 encoded `key:secret`)
-**Base URL Pattern:** `{storeUrl}/wp-json/wc/v3/`
+### wooAppPasswordService.js
 
-### prokipMapper.js
-Integrates with Prokip API.
+WooCommerce Application Password authentication.
 
 **Key Functions:**
 
 ```javascript
-// Get products from Prokip
-async function getProkipProducts(locationId)
-
-// Record sale in Prokip
-async function sendSaleToProkip(saleData)
-
-// Update Prokip inventory
-async function updateProkipInventory(sku, quantity, locationId)
-```
-
-**Authentication:** Bearer token
-**Base URL:** `https://api.prokip.africa`
-
-### syncService.js
-Core synchronization logic.
-
-**Key Function:**
-
-```javascript
-async function processStoreToProkip(storeUrl, topic, data, platform)
-```
-
-**Flow:**
-1. Receive webhook from store
-2. Parse order data
-3. Extract SKU and quantity
-4. Check if order already processed (SalesLog)
-5. Send sale to Prokip
-6. Update inventory cache
-7. Log transaction
-
----
-
-## Background Jobs
-
-### Inventory Sync Cron Job
-
-**Schedule:** Every 5 minutes
-**Implementation:** node-cron
-
-```javascript
-cron.schedule('*/5 * * * *', async () => {
-  // 1. Get Prokip products and inventory
-  const prokipProducts = await getProkipProducts(locationId);
-  
-  // 2. Get all active connections
-  const connections = await prisma.connection.findMany({
-    where: { syncEnabled: true }
-  });
-  
-  // 3. For each connection
-  for (const conn of connections) {
-    // 4. Compare Prokip inventory with store inventory
-    // 5. Push updates to store if differences found
-  }
-});
+createAuthenticatedClient(storeUrl, username, appPassword)
+getProducts(client)
+updateProduct(client, productId, data)
+getOrders(client, params)
 ```
 
 ---
 
-## Authentication & Security
+## Environment Variables
 
-### JWT Middleware
+```dotenv
+# Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/prokip_integration
 
-```javascript
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-  
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-}
-```
+# Server
+PORT=3000
+NODE_ENV=development
 
-**Protected Routes:**
-- All `/connections/*` endpoints
-- All `/sync/*` endpoints
-- All `/setup/*` endpoints
+# Prokip API
+PROKIP_API=https://api.prokip.africa
 
-### Password Hashing
+# Shopify OAuth
+SHOPIFY_CLIENT_ID=your_client_id
+SHOPIFY_CLIENT_SECRET=your_client_secret
+SHOPIFY_SCOPES=read_products,write_products,read_inventory,write_inventory,read_locations,read_orders
+REDIRECT_URI=https://your-domain.com/connections/callback/shopify
+WEBHOOK_URL=https://your-domain.com/connections/webhook/shopify
 
-```javascript
-const hashedPassword = await bcrypt.hash(password, 10);
-const isMatch = await bcrypt.compare(inputPassword, storedHash);
+# WooCommerce OAuth (optional)
+WOOCOMMERCE_CLIENT_ID=
+WOOCOMMERCE_CLIENT_SECRET=
+
+# Mock Mode
+MOCK_PROKIP=false
+MOCK_SHOPIFY=false
+MOCK_WOO=false
+MOCK_PROKIP_URL=http://localhost:4000
+MOCK_SHOPIFY_URL=http://localhost:4001
 ```
 
 ---
 
 ## Error Handling
 
-### OAuth Errors
+### Standard Error Response
 
-```javascript
-// User cancels authorization
-/?shopify_error=access_denied
-
-// Invalid credentials
-/?shopify_error=Failed to exchange authorization code
-
-// Store already connected
-// Updates existing connection instead of failing
-```
-
-### API Errors
-
-```javascript
+```json
 {
   "error": "Error message",
-  "details": "Additional context"
+  "details": "Additional details (optional)"
 }
 ```
 
-**HTTP Status Codes:**
-- `200` - Success
-- `400` - Bad request / validation error
-- `401` - Unauthorized
-- `500` - Server error
+### HTTP Status Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Success |
+| 400 | Bad Request (validation error) |
+| 401 | Unauthorized (invalid/missing token) |
+| 404 | Resource not found |
+| 500 | Server error |
+
+### Common Errors
+
+**Prokip Authentication:**
+- `Authentication failed` - Wrong username/password
+- `Session expired` - Token expired, need to re-login
+
+**Shopify:**
+- `read_locations scope not approved` - Need to add scope in Shopify app
+- `Inventory item does not have inventory tracking enabled` - Auto-fixed by system
+- `OAuth code already used` - Duplicate callback, handled by system
+
+**WooCommerce:**
+- `Invalid credentials` - Wrong username or app password
+- `REST API disabled` - Enable in WooCommerce settings
 
 ---
 
-## Environment Variables
+## Webhook Processing
 
-Required configuration in `.env`:
+### Shopify Webhooks
 
-```dotenv
-# Database
-DATABASE_URL=postgresql://...
+```javascript
+router.post('/webhook/shopify', (req, res) => {
+  // Verify HMAC signature
+  const hmac = req.headers['x-shopify-hmac-sha256'];
+  const topic = req.headers['x-shopify-topic'];
+  const shop = req.headers['x-shopify-shop-domain'];
+  
+  // Validate signature
+  const generatedHmac = crypto.createHmac('sha256', SHOPIFY_CLIENT_SECRET)
+    .update(req.body)
+    .digest('base64');
+  
+  if (generatedHmac !== hmac) {
+    return res.status(401).send('Invalid HMAC');
+  }
+  
+  // Process webhook
+  processWebhook(shop, topic, JSON.parse(req.body));
+  
+  res.status(200).send('OK');
+});
+```
 
-# Server
-PORT=3000
-NODE_ENV=development
+### WooCommerce Webhooks
 
-# Shopify
-SHOPIFY_CLIENT_ID=api_key
-SHOPIFY_CLIENT_SECRET=api_secret
-REDIRECT_URI=https://prokip.local/connections/callback/shopify
-WEBHOOK_URL=https://prokip.local/connections/webhook/shopify
-
-# Prokip
-PROKIP_API=https://api.prokip.africa
-
-# Security
-JWT_SECRET=random_secret_string
+```javascript
+router.post('/webhook/woocommerce', (req, res) => {
+  const secret = req.headers['x-wc-webhook-signature'];
+  const topic = req.headers['x-wc-webhook-topic'];
+  const source = req.headers['x-wc-webhook-source'];
+  
+  // Validate and process
+  processWebhook(source, topic, req.body);
+  
+  res.status(200).send('OK');
+});
 ```
 
 ---
 
-## Testing
+## Security Considerations
 
-### Mock Mode
-
-Set `MOCK_MODE=true` to use local mock servers instead of real APIs.
-
-**Mock Servers:**
-- Prokip: `http://localhost:4000`
-- Shopify: `http://localhost:4001`
-- WooCommerce: `http://localhost:4002`
-
-See [MOCK_SERVER_TESTING.md](MOCK_SERVER_TESTING.md) for details.
+1. **Token Storage**: Prokip tokens stored encrypted in database
+2. **OAuth State**: Random state parameter prevents CSRF
+3. **Webhook Verification**: HMAC signature validation
+4. **Credential Encryption**: WooCommerce API keys encrypted
+5. **Input Validation**: express-validator on all endpoints
+6. **SQL Injection**: Prisma ORM prevents SQL injection
 
 ---
 
-## Performance Considerations
+## Performance Optimizations
 
-### Database Indexing
-- `User.username` - Unique index for fast login
-- `Connection.[platform, storeUrl]` - Composite unique index
-- Foreign key indexes automatically created by Prisma
-
-### Connection Pooling
-Prisma manages connection pool automatically:
-- Default pool size: 10
-- Can be configured via DATABASE_URL parameters
-
-### Caching Strategy
-- `InventoryCache` table stores last known inventory
-- Reduces API calls to Prokip
-- Only sync differences
-
----
-
-## Deployment
-
-### Production Checklist
-- [ ] Set strong `JWT_SECRET`
-- [ ] Use environment-specific DATABASE_URL
-- [ ] Configure HTTPS reverse proxy
-- [ ] Update redirect URIs
-- [ ] Enable PostgreSQL SSL
-- [ ] Set up process manager (PM2)
-- [ ] Configure log rotation
-- [ ] Set up monitoring
-- [ ] Test webhook delivery
-
----
-
-**For frontend implementation details, see [FRONTEND_IMPLEMENTATION_GUIDE.md](FRONTEND_IMPLEMENTATION_GUIDE.md)**
+1. **Connection Pooling**: Prisma manages database connections
+2. **Duplicate Prevention**: OAuth codes tracked to prevent double-processing
+3. **Batch Operations**: Inventory sync processes products in sequence
+4. **Error Isolation**: Failed syncs don't block other products
+5. **Logging**: Minimal logging in production mode

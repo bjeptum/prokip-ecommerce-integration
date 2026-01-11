@@ -1,19 +1,254 @@
-# Testing Guide for Prokip Operations Feature
+# Testing Guide - Prokip E-commerce Integration
+
+## Overview
+
+This guide covers testing the Prokip E-commerce Integration system, including manual testing workflows and mock server setup for development.
+
+---
 
 ## Prerequisites
 
 1. PostgreSQL database running
 2. Environment variables configured in `/backend/.env`
 3. Node.js and npm installed
-4. Database migrations applied
+4. Database migrations applied (`npx prisma migrate dev`)
+
+---
 
 ## Quick Start
 
-### 1. Start Mock Prokip Server (Terminal 1)
+### Start the Backend Server
 
 ```bash
-cd /home/strongestavenger/Brenda/Prokip/Engineering/prokip-ecommerce-integration/backend/tests
-MOCK_PROKIP=true node mock-prokip-api.js
+cd backend
+npm start
+```
+
+Expected output:
+```
+✅ Database connected
+🚀 Server running on http://localhost:3000
+```
+
+### Access the Dashboard
+
+Open your browser to: `http://localhost:3000`
+
+---
+
+## Test Scenarios
+
+### Scenario 1: Prokip Login
+
+**Steps:**
+1. Open `http://localhost:3000`
+2. Enter your Prokip username (e.g., `JTB`)
+3. Enter your Prokip password
+4. Click "Login"
+
+**Expected Result:**
+- Login successful
+- Business location selection screen appears
+- Your Prokip business locations are displayed
+
+**Verification:**
+- Check server logs for `POST /auth/prokip-login`
+- Token should be stored in database (`prokip_config` table)
+
+### Scenario 2: Select Business Location
+
+**Prerequisites:** Logged in to Prokip
+
+**Steps:**
+1. Select a business location from the dropdown
+2. Click "Continue"
+
+**Expected Result:**
+- Dashboard loads
+- Sidebar shows connected stores (if any)
+- Prokip Operations page displays products
+
+**Verification:**
+- Check server logs for `POST /auth/prokip-location`
+- Location ID stored in `prokip_config`
+
+### Scenario 3: Connect Shopify Store
+
+**Prerequisites:** 
+- Logged in with Prokip credentials
+- Shopify Partner app configured
+- `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET`, `REDIRECT_URI` set in `.env`
+
+**Steps:**
+1. Click "Connect Shopify" button
+2. Enter your store URL (e.g., `your-store.myshopify.com`)
+3. Click "Connect"
+4. Authorize the app in Shopify popup
+
+**Expected Result:**
+- Redirected back to dashboard with success message
+- Store appears in sidebar under "Connected Stores"
+- Webhooks registered (products/update, products/create, inventory_levels/update)
+
+**Verification:**
+- Check server logs for successful OAuth callback
+- Connection created in `connections` table
+- Webhooks visible in Shopify admin under Notifications
+
+### Scenario 4: Connect WooCommerce Store
+
+**Prerequisites:**
+- Logged in with Prokip credentials
+- WooCommerce store with REST API enabled
+- Application Password created
+
+**Steps:**
+1. Click "Connect WooCommerce" button
+2. Enter store URL (e.g., `https://your-store.com`)
+3. Enter WordPress username
+4. Enter Application Password
+5. Click "Connect"
+
+**Expected Result:**
+- Success message appears
+- Store appears in sidebar
+- Test API call succeeds
+
+**Verification:**
+- Check server logs for `POST /connections/woocommerce/connect`
+- Connection created with `platform: 'woocommerce'`
+
+### Scenario 5: View Prokip Products
+
+**Prerequisites:** Logged in with business location selected
+
+**Steps:**
+1. Click "Prokip Operations" in sidebar
+2. View the Products section
+
+**Expected Result:**
+- Products list displays with:
+  - Product name
+  - SKU
+  - Price (in your business currency)
+  - Stock quantity
+- Refresh button works
+
+**Verification:**
+- Check server logs for `GET /prokip/products`
+- Products match your Prokip inventory
+
+### Scenario 6: View Prokip Sales
+
+**Prerequisites:** Logged in with business location selected
+
+**Steps:**
+1. Click "Prokip Operations" in sidebar
+2. Click "Refresh" button in Sales section
+
+**Expected Result:**
+- Sales list displays with:
+  - Invoice number
+  - Customer name
+  - Total amount
+  - Date
+  - Status badge
+
+**Verification:**
+- Check server logs for `GET /prokip/sales`
+- Sales match your Prokip records
+
+### Scenario 7: View Connected Store Products
+
+**Prerequisites:** Store connected (Shopify or WooCommerce)
+
+**Steps:**
+1. Click on a connected store in the sidebar
+2. View the Products tab
+
+**Expected Result:**
+- Store products displayed with:
+  - Product name
+  - SKU
+  - Price
+  - Stock quantity
+- Sync button available
+
+**Verification:**
+- Check server logs for `GET /stores/:id/products`
+- Products match the connected store
+
+### Scenario 8: Sync Inventory from Prokip to Store
+
+**Prerequisites:** 
+- Store connected
+- Products with matching SKUs in both Prokip and store
+
+**Steps:**
+1. Click on a connected store in sidebar
+2. Click "Sync Products" button
+3. Select "Sync Inventory from Prokip"
+
+**Expected Result:**
+- Progress indicator shows
+- Success message with sync results:
+  - Number of products synced
+  - Any errors encountered
+- Inventory updated in connected store
+
+**Verification:**
+- Check server logs for `POST /sync/inventory`
+- Verify inventory quantities in Shopify/WooCommerce admin
+- Check `inventory_logs` table for sync records
+
+### Scenario 9: View Store Orders
+
+**Prerequisites:** Store connected with orders
+
+**Steps:**
+1. Click on a connected store in sidebar
+2. Click "Orders" tab
+
+**Expected Result:**
+- Orders list displays with:
+  - Order number
+  - Customer name
+  - Total amount
+  - Status
+  - Source indicator (Store)
+
+**Verification:**
+- Check server logs for `GET /stores/:id/orders`
+- Orders match the connected store
+
+### Scenario 10: View Store Analytics
+
+**Prerequisites:** Store connected
+
+**Steps:**
+1. Click on a connected store in sidebar
+2. Click "Analytics" tab
+
+**Expected Result:**
+- Analytics page displays with:
+  - Connection information
+  - Sync statistics
+  - Recent activity
+
+**Verification:**
+- Check server logs for `GET /sync/status`
+
+---
+
+## Mock Server Testing
+
+For development without real API access, you can use mock servers.
+
+### Start Mock Prokip Server
+
+```bash
+cd backend/tests
+node mock-prokip-api.js
 ```
 
 Expected output:
@@ -21,347 +256,173 @@ Expected output:
 Mock Prokip API Server running on http://localhost:4000
 ```
 
-### 2. Start Backend Server (Terminal 2)
+### Configure for Mock Mode
 
-```bash
-cd /home/strongestavenger/Brenda/Prokip/Engineering/prokip-ecommerce-integration/backend
-npm start
+In `.env`:
+```dotenv
+MOCK_PROKIP=true
+MOCK_PROKIP_URL=http://localhost:4000
 ```
 
-Expected output:
-```
-Server running on port 5000
-```
+---
 
-### 3. Access Frontend
+## API Testing with Postman
 
-Open browser and navigate to:
-- If using http-server: `http://localhost:3000` (start with `npx http-server -p 3000` in frontend/public)
-- Or open `/frontend/public/index.html` directly in browser
+Import the Postman collection from `backend/tests/Postman-Collection.json`
 
-## Test Scenarios
+### Key Endpoints to Test
 
-### Scenario 1: Create a Product
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/auth/prokip-login` | POST | Login with Prokip credentials |
+| `/auth/prokip-location` | POST | Set business location |
+| `/prokip/products` | GET | Get Prokip products |
+| `/prokip/sales` | GET | Get Prokip sales |
+| `/prokip/purchases` | GET | Get Prokip purchases |
+| `/connections` | GET | List all connections |
+| `/connections/shopify/initiate` | POST | Start Shopify OAuth |
+| `/connections/woocommerce/connect` | POST | Connect WooCommerce |
+| `/stores/:id/products` | GET | Get store products |
+| `/stores/:id/orders` | GET | Get store orders |
+| `/sync/status` | GET | Get sync status |
+| `/sync/inventory` | POST | Sync inventory to store |
 
-**Steps:**
-1. Login with credentials (default: admin/password)
-2. Select a business location
-3. Click "Prokip Operations" in sidebar
-4. Click "Create Product" button
-5. Fill in the form:
-   - Product Name: "Test T-Shirt"
-   - SKU: "TSHIRT-001"
-   - Sell Price: "29.99"
-   - Purchase Price: "15.00"
-   - Initial Quantity: "100"
-   - Description: "Premium cotton t-shirt"
-6. Click "Create Product"
+---
 
-**Expected Result:**
-- Success message appears
-- Results show:
-  - ✓ Created in Prokip
-  - ✓ Synced to [Store Name] (for each connected store)
-  - Or error messages if store sync fails
-- Modal closes after 3 seconds
+## Error Scenarios
 
-**Verification:**
-- Check mock Prokip server logs - should show POST /connector/api/product
-- If Shopify/WooCommerce connected, check those stores for new product
-
-### Scenario 2: Record a Sale
-
-**Prerequisites:** At least one product created (use Scenario 1)
+### Test: Invalid Prokip Credentials
 
 **Steps:**
-1. In Prokip Operations page, click "Record Sale"
-2. Fill in the form:
-   - Customer Name: "John Doe" (optional)
-   - Item 1:
-     - SKU: "TSHIRT-001"
-     - Quantity: "2"
-     - Unit Price: "29.99"
-   - Discount: "5.00" (optional)
-3. Click "Add Item" if you want multiple items
-4. Click "Record Sale"
+1. Enter wrong username/password
+2. Click Login
 
-**Expected Result:**
-- Success message appears
-- Results show:
-  - ✓ Recorded in Prokip
-  - ✓ Inventory updated in [Store Name] (for each connected store)
-- Modal closes after 3 seconds
+**Expected:**
+- Error message "Authentication failed. Please check your credentials."
+- No token stored
 
-**Verification:**
-- Check mock Prokip server logs - should show POST /connector/api/sell
-- Inventory for SKU "TSHIRT-001" should be reduced by 2
-- If stores connected, verify inventory decreased in Shopify/WooCommerce
-
-### Scenario 3: Record a Purchase
-
-**Prerequisites:** At least one product created
+### Test: Shopify OAuth Cancellation
 
 **Steps:**
-1. In Prokip Operations page, click "Record Purchase"
-2. Fill in the form:
-   - Supplier Name: "Acme Supplies Inc."
-   - Item 1:
-     - SKU: "TSHIRT-001"
-     - Quantity: "50"
-     - Unit Cost: "12.50"
-3. Click "Add Item" for multiple items if needed
-4. Click "Record Purchase"
+1. Start Shopify connection
+2. Click "Cancel" in Shopify authorization
 
-**Expected Result:**
-- Success message appears
-- Results show:
-  - ✓ Recorded in Prokip
-  - ✓ Inventory updated in [Store Name] (for each connected store)
-- Modal closes after 3 seconds
-
-**Verification:**
-- Check mock Prokip server logs - should show POST /connector/api/purchase
-- Inventory for SKU "TSHIRT-001" should be increased by 50
-- If stores connected, verify inventory increased in Shopify/WooCommerce
-
-### Scenario 4: Multiple Line Items
-
-**Steps:**
-1. Open "Record Sale" modal
-2. Add first item (SKU: TSHIRT-001, Qty: 2, Price: 29.99)
-3. Click "Add Item" button
-4. Add second item (SKU: PANTS-001, Qty: 1, Price: 49.99)
-5. Click "Add Item" again
-6. Add third item (SKU: HAT-001, Qty: 3, Price: 15.99)
-7. Set discount: 10.00
-8. Click "Record Sale"
-
-**Expected Result:**
-- All three items processed
-- Inventory reduced for each SKU
-- Total calculated correctly with discount
-
-### Scenario 5: Error Handling - Invalid SKU
-
-**Steps:**
-1. Open "Record Sale" modal
-2. Enter SKU that doesn't exist: "INVALID-SKU"
-3. Set Quantity: 1, Price: 10.00
-4. Click "Record Sale"
-
-**Expected Result:**
+**Expected:**
+- Redirected back to dashboard
 - Error message displayed
-- Operation fails gracefully
-- Details show which store failed and why
+- No connection created
 
-### Scenario 6: Error Handling - Missing Required Fields
-
-**Steps:**
-1. Open "Create Product" modal
-2. Leave SKU field empty
-3. Fill other fields
-4. Click "Create Product"
-
-**Expected Result:**
-- Error notification: "Please fill in all required fields"
-- Form not submitted
-- Modal remains open
-
-### Scenario 7: Dynamic Item Management
+### Test: Invalid Store URL
 
 **Steps:**
-1. Open "Record Sale" modal
-2. Click "Add Item" 3 times (should have 4 items total)
-3. Click delete button on 2nd item
-4. Verify only 3 items remain
-5. Try to delete when only 1 item remains
+1. Enter invalid store URL for WooCommerce
+2. Click Connect
 
-**Expected Result:**
-- Items can be added dynamically
-- Delete button works for multiple items
-- Delete button disabled when only 1 item remains
-- Grid layout adjusts properly
+**Expected:**
+- Connection fails with error message
+- No connection created
 
-### Scenario 8: Verify Existing Features Still Work
+### Test: Sync with No Matching SKUs
 
-**Shopify Connection:**
-1. Go to Settings page
-2. Click "Connect Shopify"
-3. Enter Shopify store URL
-4. Complete OAuth flow
+**Steps:**
+1. Connect a store with products
+2. Ensure no SKUs match Prokip products
+3. Run inventory sync
 
-**Expected:** Connection successful, webhooks registered
+**Expected:**
+- Sync completes but with 0 products synced
+- No errors, just no matches found
 
-**WooCommerce Connection:**
-1. Go to Settings page
-2. Click "Connect WooCommerce"
-3. Enter store URL and API credentials
-4. Connect
-
-**Expected:** Connection successful
-
-**Webhook Processing:**
-- Create order in Shopify/WooCommerce
-- Verify webhook received and processed
-- Check sync logs
-
-## API Testing with cURL
-
-### Create Product
-```bash
-# Get auth token first
-TOKEN=$(curl -X POST http://localhost:5000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"password"}' \
-  | jq -r '.token')
-
-# Create product (replace LOCATION_ID with actual ID)
-curl -X POST http://localhost:5000/prokip/products \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "API Test Product",
-    "sku": "API-TEST-001",
-    "sellPrice": 99.99,
-    "purchasePrice": 50.00,
-    "quantity": 25,
-    "description": "Created via API",
-    "locationId": "LOCATION_ID"
-  }'
-```
-
-### Record Sale
-```bash
-curl -X POST http://localhost:5000/prokip/sales \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "customerName": "API Test Customer",
-    "items": [
-      {
-        "sku": "API-TEST-001",
-        "quantity": 2,
-        "price": 99.99
-      }
-    ],
-    "discount": 10.00,
-    "locationId": "LOCATION_ID"
-  }'
-```
-
-### Record Purchase
-```bash
-curl -X POST http://localhost:5000/prokip/purchases \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "supplierName": "API Test Supplier",
-    "items": [
-      {
-        "sku": "API-TEST-001",
-        "quantity": 50,
-        "cost": 45.00
-      }
-    ],
-    "locationId": "LOCATION_ID"
-  }'
-```
+---
 
 ## Database Verification
 
-### Check Created Products (in mock server memory)
-```bash
-# Query mock server (it uses in-memory storage)
-# Products are logged to console when created
+### Check Prokip Config
+
+```sql
+SELECT * FROM prokip_config;
 ```
 
-### Check InventoryCache
-```bash
-cd /home/strongestavenger/Brenda/Prokip/Engineering/prokip-ecommerce-integration/backend
-npx prisma studio
+Should show:
+- Token (access token)
+- Refresh token
+- Expiry time
+- Location ID
+
+### Check Connections
+
+```sql
+SELECT id, platform, "storeUrl", "storeName", "syncEnabled" FROM connections;
 ```
 
-Navigate to InventoryCache table and verify:
-- Records created for each product/connection combination
-- Quantities updated after sales/purchases
-- No duplicate (connectionId, sku) pairs
+### Check Inventory Logs
 
-## Troubleshooting
+```sql
+SELECT * FROM inventory_logs ORDER BY "lastSynced" DESC LIMIT 10;
+```
 
-### Issue: Modal doesn't open
-**Solution:** 
-- Check browser console for JavaScript errors
-- Verify script.js is loaded
-- Check if closeModal() is properly closing modals
+### Check Sales Logs
 
-### Issue: "Please fill in all required fields"
-**Solution:**
-- Ensure all fields marked with * are filled
-- Check that numeric fields contain valid numbers
-- Verify SKU doesn't have spaces or special characters
+```sql
+SELECT * FROM sales_logs ORDER BY "syncedAt" DESC LIMIT 10;
+```
 
-### Issue: Sync fails to stores
-**Solution:**
-- Check if stores are actually connected (Settings page)
-- Verify store API credentials are correct
-- Check store API rate limits
-- Review backend logs for detailed error messages
+---
 
-### Issue: "Product not found" error in sale/purchase
-**Solution:**
-- Ensure product exists in Prokip first
-- Verify SKU matches exactly (case-sensitive)
-- Check that product has been synced to the store
+## Troubleshooting Tests
 
-### Issue: Migration fails
-**Solution:**
-- Run cleanup script: `node cleanup-duplicates.js`
-- Re-run migration: `npx prisma migrate dev`
-- Check database connection
+### Server Won't Start
+
+```bash
+# Check for port conflicts
+lsof -i :3000
+
+# Check database connection
+psql -h localhost -U postgres -d prokip_integration -c "SELECT 1"
+
+# Check environment variables
+cat .env | grep DATABASE_URL
+```
+
+### API Returns 500 Error
+
+```bash
+# Check server logs for stack trace
+npm start 2>&1 | tee server.log
+
+# Check Prisma client is generated
+npx prisma generate
+```
+
+### Shopify OAuth Fails
+
+1. Verify `REDIRECT_URI` matches Shopify app settings exactly
+2. Check `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET`
+3. Ensure HTTPS is used in production
+
+### Inventory Sync Fails
+
+1. Check Shopify scopes include `read_inventory`, `write_inventory`, `read_locations`
+2. Verify products have matching SKUs
+3. Check store has inventory tracking enabled
+
+---
 
 ## Performance Testing
 
-### Test with Multiple Items
-Create a sale with 10+ line items to test:
-- Form rendering performance
-- API request handling
-- Database transaction performance
+### Load Test Sync Endpoint
 
-### Test with Multiple Stores
-Connect 2-3 stores and create a product to verify:
-- Parallel sync operations
-- Error isolation (one store fails, others succeed)
-- Response time
+```bash
+# Using curl in a loop
+for i in {1..10}; do
+  curl -X POST http://localhost:3000/sync/inventory \
+    -H "Content-Type: application/json" \
+    -d '{"connectionId": 1}'
+done
+```
 
-## Success Criteria
+### Monitor Database Connections
 
-✅ All modals open and close properly
-✅ Form validation works correctly
-✅ Products created in Prokip successfully
-✅ Products synced to all connected stores
-✅ Sales reduce inventory correctly
-✅ Purchases increase inventory correctly
-✅ Multiple line items handled properly
-✅ Error messages clear and helpful
-✅ Existing Shopify/WooCommerce integrations still work
-✅ Database constraints enforced
-✅ No JavaScript errors in browser console
-✅ No unhandled exceptions in backend logs
-
-## Next Steps
-
-After successful testing:
-1. Review PROKIP_OPERATIONS_FEATURE.md for implementation details
-2. Test with real Shopify/WooCommerce stores (set MOCK_PROKIP=false)
-3. Monitor production logs for any issues
-4. Gather user feedback for improvements
-5. Consider implementing suggested future enhancements
-
-## Support
-
-For issues or questions:
-1. Check backend logs in Terminal 2
-2. Check mock Prokip server logs in Terminal 1
-3. Check browser console for frontend errors
-4. Review error messages in operation result panels
-5. Verify database state using Prisma Studio
+```sql
+SELECT count(*) FROM pg_stat_activity WHERE datname = 'prokip_integration';
+```

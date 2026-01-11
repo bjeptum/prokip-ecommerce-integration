@@ -6,6 +6,8 @@
   --accent-color: #10B981;
   --danger-color: #EF4444;
   --warning-color: #F59E0B;
+  --info-color: #3B82F6;
+  --success-color: #10B981;
   --gray-50: #F9FAFB;
   --gray-100: #F3F4F6;
   --gray-200: #E5E7EB;
@@ -691,6 +693,25 @@ body {
 .store-details p {
   font-size: 12px;
   color: var(--gray-500);
+}
+
+.store-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.store-stats .stat-item {
+  font-size: 11px;
+  color: var(--gray-500);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.store-stats .stat-item i {
+  font-size: 10px;
+  color: var(--gray-400);
 }
 
 .store-status {
@@ -1382,6 +1403,80 @@ body {
 }
 
 .stock-out {
+  background: #FEE2E2;
+  color: #991B1B;
+}
+
+.stock-low {
+  background: #FEF3C7;
+  color: #92400E;
+}
+
+/* Sync Options Modal */
+.sync-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sync-option-btn {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 15px 20px;
+  background: var(--gray-50);
+  border: 2px solid var(--gray-200);
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.sync-option-btn:hover {
+  background: white;
+  border-color: var(--primary-color);
+  box-shadow: var(--shadow);
+}
+
+.sync-option-btn i {
+  font-size: 24px;
+  width: 40px;
+  text-align: center;
+}
+
+.sync-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sync-option-text strong {
+  font-size: 14px;
+  color: var(--gray-800);
+}
+
+.sync-option-text span {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+/* Badge variants */
+.badge-info {
+  background: #DBEAFE;
+  color: #1E40AF;
+}
+
+.badge-success {
+  background: #D1FAE5;
+  color: #065F46;
+}
+
+.badge-warning {
+  background: #FEF3C7;
+  color: #92400E;
+}
+
+.badge-danger {
   background: #FEE2E2;
   color: #991B1B;
 }
@@ -2473,4 +2568,231 @@ body {
 .badge-secondary {
   background: rgba(107, 114, 128, 0.1);
   color: var(--gray-500);
+}
+
+/* Source Badges - Indicates where data came from */
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.source-badge.prokip {
+  background: linear-gradient(135deg, rgba(255, 182, 0, 0.15) 0%, rgba(255, 182, 0, 0.25) 100%);
+  color: #B38600;
+  border: 1px solid rgba(255, 182, 0, 0.3);
+}
+
+.source-badge.store {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.1) 0%, rgba(37, 99, 235, 0.2) 100%);
+  color: var(--secondary-color);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
+.source-badge i {
+  font-size: 10px;
+}
+
+/* Products Grid */
+.products-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.product-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background: white;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--gray-200);
+  transition: all 0.2s ease;
+}
+
+.product-item:hover {
+  border-color: var(--primary-color);
+  box-shadow: var(--shadow);
+}
+
+.product-item .product-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+  border-radius: var(--border-radius);
+  color: white;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.product-item .product-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.product-item .product-name {
+  font-weight: 600;
+  color: var(--gray-900);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-item .product-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.product-item .product-meta span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.product-item .product-stock.in-stock {
+  color: var(--accent-color);
+}
+
+.product-item .product-stock.out-of-stock {
+  color: var(--danger-color);
+}
+
+/* Sales Summary Cards */
+.sales-summary {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.sales-summary .summary-card {
+  flex: 1;
+  padding: 20px;
+  background: white;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--gray-200);
+  text-align: center;
+}
+
+.sales-summary .summary-label {
+  display: block;
+  font-size: 14px;
+  color: var(--gray-500);
+  margin-bottom: 8px;
+}
+
+.sales-summary .summary-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--gray-900);
+}
+
+/* Analytics Detail Card */
+.analytics-detail-card {
+  background: white;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--gray-200);
+  padding: 24px;
+  margin-top: 24px;
+}
+
+.analytics-detail-card h3 {
+  font-size: 16px;
+  color: var(--gray-900);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.analytics-detail-card h3 i {
+  color: var(--primary-color);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detail-label {
+  font-size: 12px;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.detail-value {
+  font-size: 14px;
+  color: var(--gray-900);
+  font-weight: 500;
+}
+
+/* Status Badge Colors */
+.status-success { background: rgba(16, 185, 129, 0.1); color: var(--accent-color); }
+.status-warning { background: rgba(245, 158, 11, 0.1); color: var(--warning-color); }
+.status-info { background: rgba(37, 99, 235, 0.1); color: var(--secondary-color); }
+.status-danger { background: rgba(239, 68, 68, 0.1); color: var(--danger-color); }
+.status-secondary { background: rgba(107, 114, 128, 0.1); color: var(--gray-500); }
+
+/* Purchases & Sales Sections in Prokip Operations */
+.sales-section,
+.purchases-section {
+  margin-top: 24px;
+  background: white;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--gray-200);
+  padding: 20px;
+}
+
+.sales-section .section-header,
+.purchases-section .section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.sales-section h2,
+.purchases-section h2 {
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sales-section h2 i,
+.purchases-section h2 i {
+  color: var(--primary-color);
+}
+
+/* Revenue Badge */
+.revenue-badge {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(16, 185, 129, 0.2) 100%);
+  color: var(--accent-color);
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-weight: 600;
+  font-size: 13px;
 }
