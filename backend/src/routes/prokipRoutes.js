@@ -4,6 +4,7 @@ const { body, validationResult } = require('express-validator');
 const { PrismaClient } = require('@prisma/client');
 const { createProductInStore, updateInventoryInStore } = require('../services/storeService');
 const prokipService = require('../services/prokipService');
+const authenticateToken = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -30,22 +31,35 @@ async function getHeaders() {
 /**
  * Get products from Prokip
  */
-router.get('/products', async (req, res) => {
+router.get('/products', authenticateToken, async (req, res) => {
   try {
+    const userId = req.userId || req.user?.id;
+    console.log('🔍 Getting Prokip products for user:', userId);
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+    
     let products;
     
     if (!MOCK_PROKIP) {
       // Use prokipService for real API
-      products = await prokipService.getProducts();
+      console.log('📡 Using real Prokip API (not mock)');
+      products = await prokipService.getProducts(null, userId);
     } else {
-      const headers = await getHeaders();
+      console.log('📡 Using mock Prokip API');
+      const headers = await getHeaders(userId);
       const response = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
       products = response.data.data || [];
     }
     
-    res.json({ success: true, products });
+    console.log('📦 Prokip products loaded:', products.length);
+    console.log('📦 Sample product:', products[0]);
+    res.json({ products: products });
   } catch (error) {
-    console.error('Failed to fetch products:', error.message);
+    console.error('❌ Failed to fetch products:', error.message);
+    console.error('❌ Full error object:', error);
+    console.error('❌ Error response:', error.response?.data);
     res.status(500).json({ 
       error: 'Could not load products from Prokip',
       details: error.message 
@@ -505,16 +519,31 @@ router.post('/purchases', [
 /**
  * Get sales from Prokip
  */
-router.get('/sales', async (req, res) => {
+router.get('/sales', authenticateToken, async (req, res) => {
   try {
+    const userId = req.userId || req.user?.id;
+    console.log('🔍 Getting Prokip sales for user:', userId);
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+    
     let sales;
     
     if (!MOCK_PROKIP) {
       // Use prokipService for real API
       const { startDate, endDate, locationId } = req.query;
-      sales = await prokipService.getSales(locationId, startDate, endDate);
+      console.log('📊 Fetching sales with params:', { startDate, endDate, locationId });
+      
+      // Get sales from real Prokip API
+      const headers = await prokipService.getAuthHeaders(userId);
+      const response = await axios.get(`${process.env.PROKIP_API}/connector/api/sell?per_page=-1`, { headers });
+      sales = response.data.data || [];
+      
+      console.log('📦 Sales loaded from real API:', sales.length);
     } else {
-      const headers = await getHeaders();
+      // Use mock API
+      const headers = await getHeaders(userId);
       const response = await axios.get(PROKIP_BASE + 'sell?per_page=-1', { headers });
       sales = response.data.data || [];
     }
@@ -522,6 +551,7 @@ router.get('/sales', async (req, res) => {
     res.json({ success: true, sales });
   } catch (error) {
     console.error('Failed to fetch sales:', error.message);
+    console.error('Full error:', error);
     res.status(500).json({ 
       error: 'Could not load sales from Prokip',
       details: error.message 
@@ -532,16 +562,28 @@ router.get('/sales', async (req, res) => {
 /**
  * Get purchases from Prokip
  */
-router.get('/purchases', async (req, res) => {
+router.get('/purchases', authenticateToken, async (req, res) => {
   try {
+    const userId = req.userId || req.user?.id;
+    console.log('🔍 Getting Prokip purchases for user:', userId);
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+    
     let purchases;
     
     if (!MOCK_PROKIP) {
       // Use prokipService for real API
       const { startDate, endDate, locationId } = req.query;
-      purchases = await prokipService.getPurchases(locationId, startDate, endDate);
+      console.log('📊 Fetching purchases with params:', { startDate, endDate, locationId });
+      
+      // Get purchases from real Prokip API using improved service function
+      purchases = await prokipService.getPurchases(locationId, startDate, endDate, userId);
+      console.log('📦 Purchases loaded from real API:', purchases.length);
     } else {
-      const headers = await getHeaders();
+      // Use mock API
+      const headers = await getHeaders(userId);
       const response = await axios.get(PROKIP_BASE + 'purchase?per_page=-1', { headers });
       purchases = response.data.data || [];
     }
@@ -549,6 +591,7 @@ router.get('/purchases', async (req, res) => {
     res.json({ success: true, purchases });
   } catch (error) {
     console.error('Failed to fetch purchases:', error.message);
+    console.error('Full error:', error);
     res.status(500).json({ 
       error: 'Could not load purchases from Prokip',
       details: error.message 

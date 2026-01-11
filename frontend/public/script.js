@@ -1151,15 +1151,20 @@ function updateActivityFeed(data) {
   const activityList = document.getElementById('activity-list');
   const activities = [];
 
-  data.forEach(store => {
-    if (store.lastSync) {
-      activities.push({
-        message: `Synced ${store.platform} store: ${store.storeUrl}`,
-        time: new Date(store.lastSync).toLocaleString(),
-        icon: 'fas fa-sync'
-      });
-    }
-  });
+  // Handle both array and object data structures
+  const stores = Array.isArray(data) ? data : (data.stores || data || []);
+  
+  if (Array.isArray(stores)) {
+    stores.forEach(store => {
+      if (store.lastSync) {
+        activities.push({
+          message: `Synced ${store.platform} store: ${store.storeUrl}`,
+          time: new Date(store.lastSync).toLocaleString(),
+          icon: 'fas fa-sync'
+        });
+      }
+    });
+  }
 
   if (activities.length === 0) {
     activities.push({
@@ -1194,14 +1199,16 @@ async function loadConnectedStores() {
     const stores = data.stores || data;
     
     console.log('🏪 Stores found:', stores.length);
-    stores.forEach(store => {
-      console.log(`  - ${store.platform}: ${store.storeUrl}`);
-    });
+    if (Array.isArray(stores)) {
+      stores.forEach(store => {
+        console.log(`  - ${store.platform}: ${store.storeUrl}`);
+      });
+    }
 
     const storesList = document.getElementById('stores-list');
     storesList.innerHTML = '';
 
-    if (stores.length === 0) {
+    if (!Array.isArray(stores) || stores.length === 0) {
       storesList.innerHTML = '<p style="color: var(--gray-500); text-align: center; padding: 20px;">No stores connected yet. Connect your first store above!</p>';
       return;
     }

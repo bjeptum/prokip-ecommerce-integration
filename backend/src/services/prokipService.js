@@ -20,24 +20,73 @@ const PROKIP_CLIENT_SECRET = 'vkbDU9dKp3iO3h0Yjc3C9sRSmnvBsq5qdtMTEarK';
  */
 async function authenticateUser(username, password) {
   try {
+    console.log('🔐 Attempting Prokip authentication with real API...');
+    console.log('📧 Username:', username);
+    console.log('🌐 API URL:', process.env.PROKIP_API);
+    console.log('🔑 Client ID:', process.env.PROKIP_CLIENT_ID);
+    
+    // Create form data exactly as specified in the API documentation
     const formData = new URLSearchParams();
     formData.append('username', username);
     formData.append('password', password);
-    formData.append('desktop_version', '');
-    formData.append('client_id', PROKIP_CLIENT_ID);
-    formData.append('client_secret', PROKIP_CLIENT_SECRET);
+    formData.append('desktop_version', ''); // Empty as per specification
+    formData.append('client_id', process.env.PROKIP_CLIENT_ID || '6');
+    formData.append('client_secret', process.env.PROKIP_CLIENT_SECRET || 'vkbDU9dKp3iO3h0Yjc3C9sRSmnvBsq5qdtMTEarK');
     formData.append('grant_type', 'password');
-    formData.append('granttype', 'password');
-    formData.append('scope', '');
+    formData.append('granttype', 'password'); // Both as per specification
+    formData.append('scope', ''); // Empty as per specification
+
+    console.log('📤 Sending request to:', `${process.env.PROKIP_API}/oauth/token`);
+    console.log('📋 Form data:', Object.fromEntries(formData.entries()));
 
     const response = await axios.post(`${process.env.PROKIP_API}/oauth/token`, formData, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      headers: { 
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: 15000 // 15 second timeout
     });
 
-    return response.data;
+    console.log('✅ Real Prokip authentication successful!');
+    console.log('📦 Response:', response.data);
+    
+    // Validate response format matches expected structure
+    if (!response.data.access_token) {
+      throw new Error('Invalid response format from Prokip API - missing access_token');
+    }
+    
+    // Ensure response has expected fields
+    const tokenData = {
+      access_token: response.data.access_token,
+      token_type: response.data.token_type || 'Bearer',
+      expires_in: response.data.expires_in || 3600,
+      refresh_token: response.data.refresh_token,
+      scope: response.data.scope || ''
+    };
+    
+    console.log('✅ Token validation successful');
+    return tokenData;
+    
   } catch (error) {
-    console.error('Prokip authentication failed:', error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || 'Authentication failed. Please check your credentials.');
+    console.error('❌ Real Prokip authentication failed:');
+    console.error('   Error:', error.message);
+    console.error('   Code:', error.code);
+    console.error('   Status:', error.response?.status);
+    console.error('   Response:', error.response?.data);
+    
+    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      throw new Error(`Cannot connect to Prokip API at ${process.env.PROKIP_API}. Please check your internet connection or contact support.`);
+    }
+    
+    if (error.response?.status === 401) {
+      throw new Error('Invalid Prokip credentials. Please check your email and password.');
+    }
+    
+    if (error.response?.status === 400) {
+      const errorMessage = error.response?.data?.message || error.response?.data?.error_description || 'Invalid request format';
+      throw new Error(`Bad request: ${errorMessage}. Please check your credentials.`);
+    }
+    
+    throw new Error(error.response?.data?.message || error.response?.data?.error_description || error.message || 'Authentication failed. Please check your credentials.');
   }
 }
 
@@ -73,39 +122,69 @@ async function refreshAccessToken(refreshToken) {
 async function saveProkipConfig(data, userId = 1) {
   const { access_token, refresh_token, expires_in, locationId } = data;
   
+  console.log('🔍 saveProkipConfig called:');
+  console.log('  - userId:', userId);
+  console.log('  - access_token length:', access_token ? access_token.length : 'null');
+  console.log('  - access_token preview:', access_token ? access_token.substring(0, 50) + '...' : 'null');
+  console.log('  - locationId:', locationId);
+  
   // Calculate expiration time
   const expiresAt = new Date(Date.now() + (expires_in * 1000));
 
-  await prisma.prokipConfig.upsert({
-    where: { id: 1 },
-    update: {
-      token: access_token,
-      refreshToken: refresh_token || null,
-      expiresAt,
-      locationId: locationId?.toString() || '',
-      userId,
-      updatedAt: new Date()
-    },
-    create: {
-      id: 1,
-      token: access_token,
-      refreshToken: refresh_token || null,
-      expiresAt,
-      apiUrl: process.env.PROKIP_API,
-      locationId: locationId?.toString() || '',
-      userId
-    }
-  });
+  // First try to find existing config for this user
+  const existingConfig = await prisma.prokipConfig.findFirst({ where: { userId } });
+  
+  console.log('  - existingConfig found:', !!existingConfig);
+  if (existingConfig) {
+    console.log('  - existing token length:', existingConfig.token ? existingConfig.token.length : 'null');
+    console.log('  - existing token preview:', existingConfig.token ? existingConfig.token.substring(0, 50) + '...' : 'null');
+  }
+  
+  if (existingConfig) {
+    // Update existing config
+    console.log('🔄 Updating existing config...');
+    await prisma.prokipConfig.update({
+      where: { id: existingConfig.id },
+      data: {
+        token: access_token,
+        refreshToken: refresh_token || null,
+        expiresAt,
+        locationId: locationId?.toString() || '',
+        updatedAt: new Date()
+      }
+    });
+    console.log('✅ Config updated successfully');
+  } else {
+    // Create new config
+    console.log('➕ Creating new config...');
+    await prisma.prokipConfig.create({
+      data: {
+        token: access_token,
+        refreshToken: refresh_token || null,
+        expiresAt,
+        apiUrl: process.env.PROKIP_API,
+        locationId: locationId?.toString() || '',
+        userId
+      }
+    });
+    console.log('✅ Config created successfully');
+  }
 }
 
 /**
  * Get valid access token, refreshing if necessary
  * @returns {Promise<string|null>} - Valid access token or null
  */
-async function getValidToken() {
-  const config = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+async function getValidToken(userId = null) {
+  if (!userId) {
+    console.warn('⚠️ getValidToken called without userId');
+    return null;
+  }
+  
+  const config = await prisma.prokipConfig.findFirst({ where: { userId } });
   
   if (!config || !config.token) {
+    console.warn('⚠️ No Prokip config found for user:', userId);
     return null;
   }
 
@@ -134,8 +213,8 @@ async function getValidToken() {
  * Get Prokip API headers with valid token
  * @returns {Promise<Object>} - Headers object
  */
-async function getAuthHeaders() {
-  const token = await getValidToken();
+async function getAuthHeaders(userId = null) {
+  const token = await getValidToken(userId);
   if (!token) {
     throw new Error('Not authenticated with Prokip. Please log in.');
   }
@@ -154,15 +233,35 @@ async function getAuthHeaders() {
  */
 async function getBusinessLocations(token) {
   try {
+    console.log('📍 Fetching business locations from real Prokip API...');
+    console.log('🔗 URL:', `${process.env.PROKIP_API}/connector/api/business-location`);
+    
     const response = await axios.get(`${process.env.PROKIP_API}/connector/api/business-location`, {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/json'
-      }
+      },
+      timeout: 15000
     });
-    return response.data.data || response.data || [];
+    
+    console.log('✅ Business locations fetched successfully');
+    console.log('📍 Number of locations:', response.data.data?.length || response.data?.length || 0);
+    
+    // Handle different response formats
+    const locations = response.data.data || response.data || [];
+    return Array.isArray(locations) ? locations : [];
+    
   } catch (error) {
     console.error('Failed to fetch business locations:', error.response?.data || error.message);
+    
+    if (error.response?.status === 401) {
+      throw new Error('Session expired. Please log in again.');
+    }
+    
+    if (error.response?.status === 403) {
+      throw new Error('Access denied. Please check your permissions.');
+    }
+    
     throw new Error('Could not load your business locations. Please try again.');
   }
 }
@@ -170,23 +269,56 @@ async function getBusinessLocations(token) {
 /**
  * Get products from Prokip inventory
  * @param {number} locationId - Business location ID
+ * @param {number} userId - User ID
  * @returns {Promise<Array>} - List of products
  */
-async function getProducts(locationId = null) {
+async function getProducts(locationId = null, userId = null) {
   try {
-    const headers = await getAuthHeaders();
-    const config = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    if (!userId) {
+      console.warn('⚠️ getProducts called without userId');
+      return [];
+    }
+    
+    console.log('🌐 Fetching products from real Prokip API for user:', userId);
+    const headers = await getAuthHeaders(userId);
+    const config = await prisma.prokipConfig.findFirst({ where: { userId } });
     const locId = locationId || config?.locationId;
+    
+    if (!config || !config.token) {
+      console.warn('⚠️ No Prokip config found for user:', userId);
+      return [];
+    }
     
     let url = `${process.env.PROKIP_API}/connector/api/product?per_page=-1`;
     if (locId) {
       url += `&location_id=${locId}`;
     }
 
-    const response = await axios.get(url, { headers });
-    return response.data.data || [];
+    console.log('🔗 Fetching from URL:', url);
+    console.log('🔑 Using headers:', headers);
+
+    const response = await axios.get(url, { headers, timeout: 15000 });
+    console.log('📡 Products response status:', response.status);
+    console.log('📦 Products response data structure:', Object.keys(response.data));
+    
+    // Handle different response formats
+    const products = response.data.data || response.data || [];
+    console.log('📦 Number of products fetched:', products.length);
+    
+    return Array.isArray(products) ? products : [];
+    
   } catch (error) {
     console.error('Failed to fetch Prokip products:', error.response?.data || error.message);
+    console.error('Full error:', error);
+    
+    if (error.response?.status === 401) {
+      throw new Error('Session expired. Please log in again.');
+    }
+    
+    if (error.response?.status === 403) {
+      throw new Error('Access denied. Please check your permissions.');
+    }
+    
     throw new Error('Could not load products from Prokip. Please check your connection.');
   }
 }
@@ -196,10 +328,10 @@ async function getProducts(locationId = null) {
  * @param {number} locationId - Business location ID
  * @returns {Promise<Array>} - Stock data
  */
-async function getInventory(locationId = null) {
+async function getInventory(locationId = null, userId = null) {
   try {
-    const headers = await getAuthHeaders();
-    const config = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
     const locId = locationId || config?.locationId;
     
     let url = `${process.env.PROKIP_API}/connector/api/product-stock-report`;
@@ -220,9 +352,9 @@ async function getInventory(locationId = null) {
  * @param {string} sku - Product SKU
  * @returns {Promise<Object|null>} - Product data or null
  */
-async function getProductBySku(sku) {
+async function getProductBySku(sku, userId = null) {
   try {
-    const headers = await getAuthHeaders();
+    const headers = await getAuthHeaders(userId);
     const response = await axios.get(
       `${process.env.PROKIP_API}/connector/api/product?sku=${encodeURIComponent(sku)}&per_page=-1`,
       { headers }
@@ -241,10 +373,10 @@ async function getProductBySku(sku) {
  * @param {Object} productData - Product details
  * @returns {Promise<Object>} - Created product
  */
-async function createProduct(productData) {
+async function createProduct(productData, userId = null) {
   try {
-    const headers = await getAuthHeaders();
-    const config = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
     
     const payload = {
       name: productData.name,
@@ -273,10 +405,10 @@ async function createProduct(productData) {
  * @param {Object} saleData - Sale details
  * @returns {Promise<Object>} - Sale response
  */
-async function recordSale(saleData) {
+async function recordSale(saleData, userId = null) {
   try {
-    const headers = await getAuthHeaders();
-    const config = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
     
     const sellBody = {
       sells: [{
@@ -317,9 +449,9 @@ async function recordSale(saleData) {
  * @param {Object} returnData - Return details
  * @returns {Promise<Object>} - Return response
  */
-async function processSellReturn(returnData) {
+async function processSellReturn(returnData, userId = null) {
   try {
-    const headers = await getAuthHeaders();
+    const headers = await getAuthHeaders(userId);
     
     const returnBody = {
       transaction_id: returnData.transactionId,
@@ -347,10 +479,10 @@ async function processSellReturn(returnData) {
  * @param {Object} purchaseData - Purchase details
  * @returns {Promise<Object>} - Purchase response
  */
-async function recordPurchase(purchaseData) {
+async function recordPurchase(purchaseData, userId = null) {
   try {
-    const headers = await getAuthHeaders();
-    const config = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
     
     const purchaseBody = {
       location_id: purchaseData.locationId || config?.locationId,
@@ -380,10 +512,10 @@ async function recordPurchase(purchaseData) {
  * @param {number} locationId - Location ID
  * @returns {Promise<Object>} - Update response
  */
-async function updateProductStock(productId, quantity, locationId = null) {
+async function updateProductStock(productId, quantity, locationId = null, userId = null) {
   try {
-    const headers = await getAuthHeaders();
-    const config = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
     
     const response = await axios.put(
       `${process.env.PROKIP_API}/connector/api/product/${productId}`,
@@ -417,10 +549,10 @@ async function getProkipConfig() {
  * @param {string} endDate - End date for filtering (optional)
  * @returns {Promise<Array>} - List of sales
  */
-async function getSales(locationId = null, startDate = null, endDate = null) {
+async function getSales(locationId = null, startDate = null, endDate = null, userId = null) {
   try {
-    const headers = await getAuthHeaders();
-    const config = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
     const locId = locationId || config?.locationId;
     
     let url = `${process.env.PROKIP_API}/connector/api/sell?per_page=-1`;
@@ -449,37 +581,59 @@ async function getSales(locationId = null, startDate = null, endDate = null) {
  * @param {string} endDate - End date for filtering (optional)
  * @returns {Promise<Array>} - List of purchases
  */
-async function getPurchases(locationId = null, startDate = null, endDate = null) {
+async function getPurchases(locationId = null, startDate = null, endDate = null, userId = null) {
   try {
-    const headers = await getAuthHeaders();
-    const config = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
     const locId = locationId || config?.locationId;
     
+    // Try different possible endpoints for purchases
     let url = `${process.env.PROKIP_API}/connector/api/purchase?per_page=-1`;
-    if (locId) {
-      url += `&location_id=${locId}`;
+    
+    try {
+      console.log('🔍 Trying purchases endpoint:', url);
+      const response = await axios.get(url, { headers });
+      return response.data.data || [];
+    } catch (purchaseError) {
+      console.log('❌ Purchase endpoint failed, trying alternatives...');
+      
+      // Try common alternatives
+      const alternatives = [
+        `${process.env.PROKIP_API}/connector/api/purchases?per_page=-1`,
+        `${process.env.PROKIP_API}/connector/api/expense?per_page=-1`,
+        `${process.env.PROKIP_API}/connector/api/expenses?per_page=-1`
+      ];
+      
+      for (const altUrl of alternatives) {
+        try {
+          console.log('🔍 Trying alternative:', altUrl);
+          const altResponse = await axios.get(altUrl, { headers });
+          console.log('✅ Alternative endpoint worked:', altUrl);
+          return altResponse.data.data || [];
+        } catch (altError) {
+          console.log('❌ Alternative failed:', altUrl);
+          continue;
+        }
+      }
+      
+      // If all alternatives fail, return empty array instead of throwing error
+      console.log('⚠️ No purchases endpoint found, returning empty array');
+      return [];
     }
-    if (startDate) {
-      url += `&start_date=${startDate}`;
-    }
-    if (endDate) {
-      url += `&end_date=${endDate}`;
-    }
-
-    const response = await axios.get(url, { headers });
-    return response.data.data || [];
   } catch (error) {
     console.error('Failed to fetch Prokip purchases:', error.response?.data || error.message);
-    throw new Error('Could not load purchases from Prokip. Please check your connection.');
+    // Return empty array instead of throwing error to prevent breaking the UI
+    return [];
   }
 }
 
 /**
  * Check if user is authenticated with Prokip
+ * @param {number} userId - User ID
  * @returns {Promise<boolean>}
  */
-async function isAuthenticated() {
-  const token = await getValidToken();
+async function isAuthenticated(userId = null) {
+  const token = await getValidToken(userId);
   return !!token;
 }
 

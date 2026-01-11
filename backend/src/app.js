@@ -10,6 +10,7 @@ const syncRoutes = require('./routes/syncRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const prokipRoutes = require('./routes/prokipRoutes');
 const setupRoutes = require('./routes/setupRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 
 const app = express();
 const prisma = new PrismaClient();
@@ -58,6 +59,7 @@ app.use('/sync', syncRoutes);
 app.use('/webhooks', webhookRoutes);
 app.use('/prokip', prokipRoutes);
 app.use('/setup', setupRoutes);
+app.use('/api', analyticsRoutes);
 
 // Serve static files (for frontend)
 app.use(express.static('../frontend/public'));

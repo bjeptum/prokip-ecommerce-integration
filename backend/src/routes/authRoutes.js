@@ -92,10 +92,18 @@ router.post('/prokip-login', [
       message: 'Login successful' 
     });
   } catch (error) {
-    console.error('Prokip login error:', error.message);
+    console.error('❌ Prokip login error in auth route:');
+    console.error('   Error message:', error.message);
+    console.error('   Error response:', error.response?.data);
+    console.error('   Error status:', error.response?.status);
+    console.error('   Error code:', error.code);
+    
+    // Send detailed error response to client
     res.status(400).json({ 
-      error: 'Login failed. Please check your email and password.',
-      details: error.message 
+      error: error.message || 'Login failed. Please check your email and password.',
+      details: error.response?.data || 'Unknown error',
+      status: error.response?.status,
+      code: error.code
     });
   }
 });
@@ -119,15 +127,14 @@ router.post('/prokip-location', [
 
   const { locationId, access_token, refresh_token, expires_in, username } = req.body;
 
-  try {
-    // Save Prokip config
-    await prokipService.saveProkipConfig({
-      access_token,
-      refresh_token: refresh_token || null,
-      expires_in: expires_in || 86400, // Default 24 hours
-      locationId
-    });
+  console.log('🔍 Prokip location save attempt:');
+  console.log('  - locationId:', locationId);
+  console.log('  - access_token length:', access_token ? access_token.length : 'null');
+  console.log('  - access_token preview:', access_token ? access_token.substring(0, 50) + '...' : 'null');
+  console.log('  - refresh_token present:', !!refresh_token);
+  console.log('  - expires_in:', expires_in);
 
+  try {
     // Create or find user based on locationId (using locationId as unique identifier)
     const uniqueUsername = `prokip_${locationId}`;
     let user = await prisma.user.findUnique({ where: { username: uniqueUsername } });
@@ -137,25 +144,29 @@ router.post('/prokip-location', [
       const bcrypt = require('bcryptjs');
       const hashedPassword = await bcrypt.hash(`prokip_${locationId}_${Date.now()}`, 10);
       user = await prisma.user.create({
-        data: { 
+        data: {
           username: uniqueUsername,
           password: hashedPassword
         }
       });
-      console.log(`✅ Created new user for Prokip location ${locationId}`);
     }
 
-    // Generate JWT for this user
-    const jwtToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '8h' });
+    // Save Prokip config with the correct userId
+    await prokipService.saveProkipConfig({
+      access_token,
+      refresh_token: refresh_token || null,
+      expires_in: expires_in || 86400, // Default 24 hours
+      locationId
+    }, user.id);
 
-    res.json({ 
+    res.json({
       success: true,
-      message: 'Business location set successfully',
-      token: jwtToken,  // Return JWT for API authentication
-      userId: user.id
+      message: 'Prokip location saved successfully',
+      userId: user.id,
+      locationId
     });
   } catch (error) {
-    console.error('Failed to set Prokip location:', error.message);
+    console.error('Failed to save Prokip location:', error);
     res.status(500).json({ 
       error: 'Could not save your location. Please try again.',
       details: error.message 
@@ -192,13 +203,16 @@ router.get('/prokip-locations', async (req, res) => {
  */
 router.get('/prokip-status', async (req, res) => {
   try {
-    const isAuthenticated = await prokipService.isAuthenticated();
-    const config = await prokipService.getProkipConfig();
+    // Try to get userId from request (if authenticated)
+    const userId = req.userId || req.user?.id;
+    const isAuthenticated = await prokipService.isAuthenticated(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : null;
     
     res.json({
       authenticated: isAuthenticated,
       hasLocation: !!config?.locationId,
-      locationId: config?.locationId || null
+      locationId: config?.locationId || null,
+      userId
     });
   } catch (error) {
     res.json({ authenticated: false, hasLocation: false });

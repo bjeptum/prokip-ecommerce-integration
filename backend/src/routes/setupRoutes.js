@@ -23,12 +23,17 @@ router.get('/products', async (req, res) => {
     
     if (!MOCK_PROKIP) {
       // Use prokipService for real API
-      const isAuthenticated = await prokipService.isAuthenticated();
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
+      
+      const isAuthenticated = await prokipService.isAuthenticated(userId);
       if (!isAuthenticated) {
         return res.status(401).json({ error: 'Please log in to Prokip first' });
       }
       
-      const products = await prokipService.getProducts();
+      const products = await prokipService.getProducts(null, userId);
       prokipProducts = products.map(p => ({
         source: 'prokip',
         id: p.id,
@@ -40,9 +45,9 @@ router.get('/products', async (req, res) => {
       }));
     } else {
       // Mock mode
-      const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+      const prokip = await prisma.prokipConfig.findFirst();
       if (!prokip?.token) {
-        return res.status(400).json({ error: 'Prokip config missing' });
+        return res.status(400).json({ error: 'Prokip config missing - please login first' });
       }
 
       const headers = {
@@ -129,9 +134,16 @@ router.get('/products/matches', async (req, res) => {
       if (!isAuthenticated) {
         return res.status(401).json({ error: 'Please log in to Prokip first' });
       }
-      prokipProducts = await prokipService.getProducts();
+      
+      // Get userId from authenticated request
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
+      
+      prokipProducts = await prokipService.getProducts(null, userId);
     } else {
-      const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+      const prokip = await prisma.prokipConfig.findFirst();
       if (!prokip?.token) {
         return res.status(400).json({ error: 'Prokip config missing' });
       }
@@ -214,53 +226,60 @@ router.post('/products/readiness-check', [
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   const { connectionId } = req.body;
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
-
-  if (!prokip?.token) {
-    return res.status(400).json({ error: 'Prokip config missing' });
-  }
+  
+  try {
+    // Get any valid Prokip config (not hardcoded to id: 1)
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+    
+    const prokip = await prisma.prokipConfig.findFirst({ where: { userId } });
+    
+    if (!prokip?.token) {
+      return res.status(400).json({ error: 'Prokip config missing - please login first' });
+    }
 
   const headers = {
     Authorization: `Bearer ${prokip.token}`,
     Accept: 'application/json'
   };
 
-  try {
-    const response = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
-    const products = response.data.data;
+  const response = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
+  const products = response.data.data;
 
-    const readinessReport = products.map(product => {
-      const issues = [];
-      const sellPrice = product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax;
-      
-      if (!product.name) issues.push('Missing product name');
-      if (!product.sku) issues.push('Missing SKU');
-      if (!sellPrice || sellPrice <= 0) issues.push('Missing or invalid price');
-      // Images are optional in this implementation
-      
-      return {
-        id: product.id,
-        name: product.name,
-        sku: product.sku,
-        price: sellPrice || 0,
-        ready: issues.length === 0,
-        issues
-      };
-    });
+  const readinessReport = products.map(product => {
+    const issues = [];
+    const sellPrice = product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax;
+    
+    if (!product.name) issues.push('Missing product name');
+    if (!product.sku) issues.push('Missing SKU');
+    if (!sellPrice || sellPrice <= 0) issues.push('Missing or invalid price');
+    // Images are optional in this implementation
+    
+    return {
+      id: product.id,
+      name: product.name,
+      sku: product.sku,
+      price: sellPrice || 0,
+      ready: issues.length === 0,
+      issues
+    };
+  });
 
-    const readyCount = readinessReport.filter(p => p.ready).length;
-    const totalCount = readinessReport.length;
+  const readyCount = readinessReport.filter(p => p.ready).length;
+  const totalCount = readinessReport.length;
 
-    res.json({
-      summary: {
-        total: totalCount,
-        ready: readyCount,
-        needsAttention: totalCount - readyCount
-      },
-      products: readinessReport
-    });
+  res.json({
+    summary: {
+      total: totalCount,
+      ready: readyCount,
+      needsAttention: totalCount - readyCount
+    },
+    products: readinessReport
+  });
   } catch (error) {
-    console.error('Readiness check failed:', error);
+    console.error('Failed to check product readiness:', error);
     res.status(500).json({ error: 'Failed to check product readiness' });
   }
 });
@@ -274,7 +293,11 @@ router.post('/products', [
 
   const { method, connectionId } = req.body;
   const connection = await prisma.connection.findUnique({ where: { id: parseInt(connectionId) } });
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+  const userId = req.user?.id;
+  if (!userId) {
+    return res.status(401).json({ error: 'User not authenticated' });
+  }
+  const prokip = await prisma.prokipConfig.findFirst({ where: { userId } });
 
   if (!connection || !prokip?.token) {
     return res.status(400).json({ error: 'Invalid connection or Prokip config' });
