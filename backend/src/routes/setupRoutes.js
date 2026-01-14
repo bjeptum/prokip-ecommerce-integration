@@ -7,6 +7,7 @@ const { getShopifyProducts } = require('../services/shopifyService');
 const { getWooProducts } = require('../services/wooService');
 const { getProkipProductIdBySku } = require('../services/prokipMapper');
 const prokipService = require('../services/prokipService');
+const authenticateToken = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -15,19 +16,15 @@ const PROKIP_BASE = MOCK_PROKIP
   ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'
   : process.env.PROKIP_API + '/connector/api/';
 
-router.get('/products', async (req, res) => {
-  const connections = await prisma.connection.findMany();
+router.get('/products', authenticateToken, async (req, res) => {
+  const userId = req.userId;
+  const connections = await prisma.connection.findMany({ where: { userId } });
 
   try {
     let prokipProducts = [];
     
     if (!MOCK_PROKIP) {
       // Use prokipService for real API
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ error: 'User not authenticated' });
-      }
-      
       const isAuthenticated = await prokipService.isAuthenticated(userId);
       if (!isAuthenticated) {
         return res.status(401).json({ error: 'Please log in to Prokip first' });
@@ -45,7 +42,7 @@ router.get('/products', async (req, res) => {
       }));
     } else {
       // Mock mode
-      const prokip = await prisma.prokipConfig.findFirst();
+      const prokip = await prisma.prokipConfig.findFirst({ where: { userId } });
       if (!prokip?.token) {
         return res.status(400).json({ error: 'Prokip config missing - please login first' });
       }
@@ -114,36 +111,34 @@ router.get('/products', async (req, res) => {
 });
 
 // Get product matches (for product matching UI)
-router.get('/products/matches', async (req, res) => {
+router.get('/products/matches', authenticateToken, async (req, res) => {
   const { connectionId } = req.query;
+  const userId = req.userId;
   
   try {
-    const connection = await prisma.connection.findUnique({ 
-      where: { id: parseInt(connectionId) } 
+    const connection = await prisma.connection.findFirst({ 
+      where: { 
+        id: parseInt(connectionId),
+        userId: userId
+      } 
     });
 
     if (!connection) {
-      return res.status(400).json({ error: 'Invalid connection' });
+      return res.status(400).json({ error: 'Invalid connection or access denied' });
     }
 
     // Get Prokip products - use service for real API
     let prokipProducts = [];
     
     if (!MOCK_PROKIP) {
-      const isAuthenticated = await prokipService.isAuthenticated();
+      const isAuthenticated = await prokipService.isAuthenticated(userId);
       if (!isAuthenticated) {
         return res.status(401).json({ error: 'Please log in to Prokip first' });
       }
       
-      // Get userId from authenticated request
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ error: 'User not authenticated' });
-      }
-      
       prokipProducts = await prokipService.getProducts(null, userId);
     } else {
-      const prokip = await prisma.prokipConfig.findFirst();
+      const prokip = await prisma.prokipConfig.findFirst({ where: { userId } });
       if (!prokip?.token) {
         return res.status(400).json({ error: 'Prokip config missing' });
       }
@@ -219,21 +214,16 @@ router.get('/products/matches', async (req, res) => {
 });
 
 // Check product readiness for push
-router.post('/products/readiness-check', [
+router.post('/products/readiness-check', authenticateToken, [
   body('connectionId').isInt()
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   const { connectionId } = req.body;
+  const userId = req.userId;
   
   try {
-    // Get any valid Prokip config (not hardcoded to id: 1)
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
-    
     const prokip = await prisma.prokipConfig.findFirst({ where: { userId } });
     
     if (!prokip?.token) {
@@ -284,7 +274,7 @@ router.post('/products/readiness-check', [
   }
 });
 
-router.post('/products', [
+router.post('/products', authenticateToken, [
   body('method').isIn(['push', 'pull']),
   body('connectionId').isInt()
 ], async (req, res) => {
@@ -292,11 +282,13 @@ router.post('/products', [
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   const { method, connectionId } = req.body;
-  const connection = await prisma.connection.findUnique({ where: { id: parseInt(connectionId) } });
-  const userId = req.user?.id;
-  if (!userId) {
-    return res.status(401).json({ error: 'User not authenticated' });
-  }
+  const userId = req.userId;
+  const connection = await prisma.connection.findFirst({ 
+    where: { 
+      id: parseInt(connectionId),
+      userId: userId
+    } 
+  });
   const prokip = await prisma.prokipConfig.findFirst({ where: { userId } });
 
   if (!connection || !prokip?.token) {
@@ -413,18 +405,34 @@ router.post('/products', [
           continue;
         }
 
+        // Extract stock quantity from Prokip product structure
+        // Try multiple paths where qty_available might be stored
+        let stockQuantity = 0;
+        const variation = product.product_variations?.[0]?.variations?.[0];
+        if (variation) {
+          // Check variation_location_details first (location-specific stock)
+          if (variation.variation_location_details && variation.variation_location_details.length > 0) {
+            stockQuantity = parseFloat(variation.variation_location_details[0]?.qty_available || 0);
+          } else {
+            // Fall back to direct qty_available on variation
+            stockQuantity = parseFloat(variation.qty_available || 0);
+          }
+        }
+        
+        console.log(`📦 Prokip product "${product.name}" (SKU: ${product.sku}) - Stock: ${stockQuantity}`);
+
         const storeProduct = {
           title: product.name,
           name: product.name,
           sku: product.sku,
           price: product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0,
-          stock_quantity: 0 // Will be synced via inventory sync
+          stock_quantity: Math.floor(stockQuantity) // Use actual stock from Prokip
         };
 
         try {
           await createProductInStore(connection, storeProduct);
           
-          // Create or update inventory log entry
+          // Create or update inventory log entry with actual stock quantity
           await prisma.inventoryLog.upsert({
             where: {
               connectionId_sku: {
@@ -435,6 +443,7 @@ router.post('/products', [
             update: {
               productId: product.id?.toString() || product.sku,
               productName: product.name,
+              quantity: Math.floor(stockQuantity), // Update with actual stock
               price: parseFloat(product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0)
             },
             create: {
@@ -442,12 +451,12 @@ router.post('/products', [
               productId: product.id?.toString() || product.sku,
               productName: product.name,
               sku: product.sku,
-              quantity: 0, // Will be synced via inventory sync
+              quantity: Math.floor(stockQuantity), // Use actual stock from Prokip
               price: parseFloat(product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0)
             }
           });
 
-          results.push({ sku: product.sku, status: 'success' });
+          results.push({ sku: product.sku, status: 'success', stock: Math.floor(stockQuantity) });
           successCount++;
         } catch (error) {
           console.error(`Failed to push product ${product.sku}:`, error.message);

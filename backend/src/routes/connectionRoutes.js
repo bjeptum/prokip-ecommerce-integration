@@ -87,17 +87,23 @@ router.get('/shopify', [
 // New Shopify connection initiation endpoint
 router.post('/shopify/initiate', [
   body('storeUrl').notEmpty()
-], async (req, res) => {
+], authMiddleware, async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   try {
     const { storeUrl } = req.body;
+    const userId = req.userId;
+    
+    console.log(`🔗 Initiating Shopify OAuth for userId: ${userId}`);
     
     // Normalize the store URL
     const normalizedUrl = normalizeShopifyUrl(storeUrl);
     
-    const state = crypto.randomBytes(16).toString('hex');
+    // Include userId in state for callback to retrieve
+    const stateData = { userId, nonce: crypto.randomBytes(16).toString('hex') };
+    const state = Buffer.from(JSON.stringify(stateData)).toString('base64');
+    
     const scopes = process.env.SHOPIFY_SCOPES || 'read_products,write_products,read_inventory,write_inventory,read_orders,write_orders';
     const redirectUri = process.env.REDIRECT_URI;
 
@@ -112,7 +118,7 @@ router.post('/shopify/initiate', [
 
 // Shopify OAuth callback
 router.get('/callback/shopify', async (req, res) => {
-  const { code, shop, error, error_description } = req.query;
+  const { code, shop, state, error, error_description } = req.query;
   
   // Handle user cancellation or errors from Shopify
   if (error) {
@@ -124,6 +130,18 @@ router.get('/callback/shopify', async (req, res) => {
   if (!code || !shop) {
     console.error('Missing OAuth parameters');
     return res.redirect('/?shopify_error=Missing authorization parameters');
+  }
+  
+  // Extract userId from state parameter
+  let userId = 1; // Default fallback
+  if (state) {
+    try {
+      const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+      userId = stateData.userId || 1;
+      console.log(`📦 Extracted userId from state: ${userId}`);
+    } catch (e) {
+      console.log('⚠️ Could not parse state, using default userId');
+    }
   }
 
   // Prevent duplicate processing of the same code
@@ -166,21 +184,21 @@ router.get('/callback/shopify', async (req, res) => {
       // Update existing connection
       await prisma.connection.update({
         where: { id: existingConnection.id },
-        data: { accessToken, lastSync: new Date() }
+        data: { accessToken, lastSync: new Date(), userId }
       });
-      console.log(`Updated Shopify connection for ${shop}`);
+      console.log(`Updated Shopify connection for ${shop} (userId: ${userId})`);
     } else {
-      // Create new connection (using default userId = 1 for backward compatibility)
+      // Create new connection with the userId from OAuth state
       const connection = await prisma.connection.create({
         data: {
-          userId: 1, // Default to first user
+          userId,
           platform: 'shopify',
           storeUrl: shop,
           accessToken,
           syncEnabled: true
         }
       });
-      console.log(`Created new Shopify connection for ${shop}`);
+      console.log(`Created new Shopify connection for ${shop} (userId: ${userId})`);
     }
 
     await registerShopifyWebhooks(shop, accessToken);

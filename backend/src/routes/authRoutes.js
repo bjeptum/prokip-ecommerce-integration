@@ -159,11 +159,15 @@ router.post('/prokip-location', [
       locationId
     }, user.id);
 
+    // Generate JWT token for the user to use in subsequent API calls
+    const jwtToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '8h' });
+
     res.json({
       success: true,
       message: 'Prokip location saved successfully',
       userId: user.id,
-      locationId
+      locationId,
+      token: jwtToken // Return JWT for API authentication
     });
   } catch (error) {
     console.error('Failed to save Prokip location:', error);

@@ -3,105 +3,104 @@ const prisma = new PrismaClient();
 
 /**
  * Get comprehensive analytics dashboard data
- * @param {number} locationId - Business location ID
+ * Uses actual schema models: SalesLog, InventoryLog, Connection
+ * @param {number} userId - User ID for filtering data
  * @param {string} dateRange - Date range filter (7d, 30d, 90d)
  * @returns {Promise<Object>} - Analytics data
  */
-async function getDashboardAnalytics(locationId = null, dateRange = '30d') {
+async function getDashboardAnalytics(userId = null, dateRange = '30d') {
   try {
     // Calculate date filter
-    const days = parseInt(dateRange.replace('d', ''));
+    const days = parseInt(dateRange.replace('d', '')) || 30;
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    const whereClause = {
-      createdAt: {
-        gte: startDate
-      },
-      ...(locationId && { locationId: parseInt(locationId) })
-    };
+    // Get user's connections
+    const connections = await prisma.connection.findMany({
+      where: userId ? { userId: parseInt(userId) } : {}
+    });
+    
+    const connectionIds = connections.map(c => c.id);
 
-    // Get sales data
-    const sales = await prisma.sale.findMany({
-      where: whereClause,
-      include: {
-        products: true
+    // Get sales data from SalesLog
+    const salesLogs = await prisma.salesLog.findMany({
+      where: {
+        connectionId: { in: connectionIds.length > 0 ? connectionIds : [-1] },
+        orderDate: { gte: startDate }
       },
-      orderBy: {
-        createdAt: 'desc'
-      }
+      include: {
+        connection: true
+      },
+      orderBy: { orderDate: 'desc' }
     });
 
-    // Get products data
-    const products = await prisma.product.findMany({
-      where: locationId ? { locationId: parseInt(locationId) } : {},
-      include: {
-        inventory: true
-      }
-    });
-
-    // Get connected stores
-    const stores = await prisma.store.findMany({
-      where: { 
-        status: 'connected',
-        ...(locationId && { locationId: parseInt(locationId) })
+    // Get inventory data from InventoryLog
+    const inventoryLogs = await prisma.inventoryLog.findMany({
+      where: {
+        connectionId: { in: connectionIds.length > 0 ? connectionIds : [-1] }
       }
     });
 
     // Calculate metrics
     const analytics = {
       overview: {
-        totalRevenue: sales.reduce((sum, sale) => sum + sale.total, 0),
-        totalOrders: sales.length,
-        averageOrderValue: sales.length > 0 ? sales.reduce((sum, sale) => sum + sale.total, 0) / sales.length : 0,
-        totalProducts: products.length,
-        connectedStores: stores.length,
-        lowStockItems: products.filter(p => p.inventory && p.inventory.quantity < 10).length
+        totalRevenue: salesLogs.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0),
+        totalOrders: salesLogs.length,
+        averageOrderValue: salesLogs.length > 0 
+          ? salesLogs.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0) / salesLogs.length 
+          : 0,
+        totalProducts: inventoryLogs.length,
+        connectedStores: connections.length,
+        lowStockItems: inventoryLogs.filter(inv => inv.quantity < 10).length
       },
       
-      salesByPlatform: calculateSalesByPlatform(sales),
+      salesByPlatform: calculateSalesByPlatform(salesLogs),
       
-      revenueChart: calculateRevenueChart(sales, days),
+      revenueChart: calculateRevenueChart(salesLogs, days),
       
-      topProducts: calculateTopProducts(sales),
+      topProducts: calculateTopProductsSync(inventoryLogs),
       
-      recentActivity: calculateRecentActivity(sales, stores),
+      recentActivity: calculateRecentActivity(salesLogs, connections),
       
-      inventoryStatus: calculateInventoryStatus(products),
+      inventoryStatus: calculateInventoryStatus(inventoryLogs),
       
-      syncStatus: calculateSyncStatus(stores)
+      syncStatus: calculateSyncStatus(connections)
     };
 
     return analytics;
     
   } catch (error) {
     console.error('Failed to get dashboard analytics:', error);
-    throw new Error('Could not load analytics data');
+    throw new Error('Could not load analytics data: ' + error.message);
   }
 }
 
 /**
  * Calculate sales breakdown by platform
  */
-function calculateSalesByPlatform(sales) {
+function calculateSalesByPlatform(salesLogs) {
   const platformData = {};
   
-  sales.forEach(sale => {
-    if (!platformData[sale.platform]) {
-      platformData[sale.platform] = {
+  salesLogs.forEach(sale => {
+    const platform = sale.platform || sale.connection?.platform || 'unknown';
+    
+    if (!platformData[platform]) {
+      platformData[platform] = {
         orders: 0,
         revenue: 0,
         percentage: 0
       };
     }
-    platformData[sale.platform].orders++;
-    platformData[sale.platform].revenue += sale.total;
+    platformData[platform].orders++;
+    platformData[platform].revenue += (sale.totalAmount || 0);
   });
 
   const totalRevenue = Object.values(platformData).reduce((sum, platform) => sum + platform.revenue, 0);
   
   Object.keys(platformData).forEach(platform => {
-    platformData[platform].percentage = totalRevenue > 0 ? (platformData[platform].revenue / totalRevenue) * 100 : 0;
+    platformData[platform].percentage = totalRevenue > 0 
+      ? Math.round((platformData[platform].revenue / totalRevenue) * 100 * 10) / 10 
+      : 0;
   });
 
   return platformData;
@@ -110,7 +109,7 @@ function calculateSalesByPlatform(sales) {
 /**
  * Calculate revenue chart data
  */
-function calculateRevenueChart(sales, days) {
+function calculateRevenueChart(salesLogs, days) {
   const chartData = [];
   
   for (let i = days - 1; i >= 0; i--) {
@@ -118,13 +117,13 @@ function calculateRevenueChart(sales, days) {
     date.setDate(date.getDate() - i);
     const dateStr = date.toISOString().split('T')[0];
     
-    const daySales = sales.filter(sale => 
-      sale.createdAt.toISOString().split('T')[0] === dateStr
+    const daySales = salesLogs.filter(sale => 
+      sale.orderDate && sale.orderDate.toISOString().split('T')[0] === dateStr
     );
     
     chartData.push({
       date: dateStr,
-      revenue: daySales.reduce((sum, sale) => sum + sale.total, 0),
+      revenue: daySales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0),
       orders: daySales.length
     });
   }
@@ -133,60 +132,50 @@ function calculateRevenueChart(sales, days) {
 }
 
 /**
- * Calculate top selling products
+ * Calculate top products from inventory logs (synchronous version)
  */
-function calculateTopProducts(sales) {
-  const productSales = {};
-  
-  sales.forEach(sale => {
-    sale.products.forEach(product => {
-      if (!productSales[product.sku]) {
-        productSales[product.sku] = {
-          name: product.name,
-          sku: product.sku,
-          quantitySold: 0,
-          revenue: 0
-        };
-      }
-      productSales[product.sku].quantitySold += product.quantity;
-      productSales[product.sku].revenue += (product.quantity * product.price);
-    });
-  });
-  
-  return Object.values(productSales)
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 10);
+function calculateTopProductsSync(inventoryLogs) {
+  return inventoryLogs
+    .sort((a, b) => b.price - a.price) // Sort by price/value
+    .slice(0, 10)
+    .map(inv => ({
+      name: inv.productName,
+      sku: inv.sku,
+      currentStock: inv.quantity,
+      price: inv.price,
+      lastSynced: inv.lastSynced
+    }));
 }
 
 /**
  * Calculate recent activity
  */
-function calculateRecentActivity(sales, stores) {
+function calculateRecentActivity(salesLogs, connections) {
   const activities = [];
   
   // Add recent sales
-  sales.slice(0, 5).forEach(sale => {
+  salesLogs.slice(0, 5).forEach(sale => {
+    const platform = sale.platform || sale.connection?.platform || 'store';
     activities.push({
       type: 'sale',
-      message: `New order ${sale.invoiceNo} from ${sale.platform}`,
-      timestamp: sale.createdAt,
-      amount: sale.total,
-      status: 'completed'
+      message: `New order ${sale.invoiceNo || sale.orderId} from ${platform}`,
+      timestamp: sale.orderDate || sale.syncedAt,
+      amount: sale.totalAmount,
+      status: sale.status || 'completed'
     });
   });
   
   // Add recent store syncs
-  stores.forEach(store => {
-    if (store.lastSyncAt) {
+  connections.forEach(conn => {
+    if (conn.lastSync) {
       activities.push({
         type: 'sync',
-        message: `Inventory synced with ${store.name}`,
-        timestamp: store.lastSyncAt,
-        status: 'success'
+        message: `Inventory synced with ${conn.storeName || conn.storeUrl}`,
+        timestamp: conn.lastSync,
+        status: conn.syncEnabled ? 'success' : 'paused'
       });
     }
   });
-  
   return activities
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
     .slice(0, 10);
@@ -195,16 +184,16 @@ function calculateRecentActivity(sales, stores) {
 /**
  * Calculate inventory status
  */
-function calculateInventoryStatus(products) {
+function calculateInventoryStatus(inventoryLogs) {
   const status = {
-    total: products.length,
+    total: inventoryLogs.length,
     inStock: 0,
     lowStock: 0,
     outOfStock: 0
   };
   
-  products.forEach(product => {
-    const quantity = product.inventory ? product.inventory.quantity : 0;
+  inventoryLogs.forEach(inv => {
+    const quantity = inv.quantity || 0;
     
     if (quantity === 0) {
       status.outOfStock++;
@@ -221,13 +210,17 @@ function calculateInventoryStatus(products) {
 /**
  * Calculate sync status for connected stores
  */
-function calculateSyncStatus(stores) {
+function calculateSyncStatus(connections) {
+  const lastSyncTimes = connections
+    .filter(c => c.lastSync)
+    .map(c => new Date(c.lastSync).getTime());
+    
   const status = {
-    total: stores.length,
-    connected: stores.filter(s => s.status === 'connected').length,
-    syncing: stores.filter(s => s.status === 'syncing').length,
-    error: stores.filter(s => s.status === 'error').length,
-    lastSync: stores.length > 0 ? Math.max(...stores.map(s => s.lastSyncAt ? new Date(s.lastSyncAt).getTime() : 0)) : null
+    total: connections.length,
+    connected: connections.filter(c => c.syncEnabled !== false).length,
+    paused: connections.filter(c => c.syncEnabled === false).length,
+    error: 0,
+    lastSync: lastSyncTimes.length > 0 ? new Date(Math.max(...lastSyncTimes)) : null
   };
   
   return status;
@@ -235,54 +228,47 @@ function calculateSyncStatus(stores) {
 
 /**
  * Get product performance analytics
- * @param {number} locationId - Business location ID
+ * @param {number} userId - User ID
  * @returns {Promise<Object>} - Product performance data
  */
-async function getProductPerformance(locationId = null) {
+async function getProductPerformance(userId = null) {
   try {
-    const sales = await prisma.sale.findMany({
-      where: locationId ? { locationId: parseInt(locationId) } : {},
-      include: {
-        products: true
-      }
+    // Get user's connections
+    const connections = await prisma.connection.findMany({
+      where: userId ? { userId: parseInt(userId) } : {}
+    });
+    
+    const connectionIds = connections.map(c => c.id);
+
+    // Get inventory logs
+    const inventoryLogs = await prisma.inventoryLog.findMany({
+      where: {
+        connectionId: { in: connectionIds.length > 0 ? connectionIds : [-1] }
+      },
+      orderBy: { lastSynced: 'desc' }
     });
 
-    const products = await prisma.product.findMany({
-      where: locationId ? { locationId: parseInt(locationId) } : {},
-      include: {
-        inventory: true
-      }
-    });
-
-    // Calculate performance metrics for each product
-    const performance = products.map(product => {
-      const productSales = sales
-        .filter(sale => sale.products.some(p => p.productId === product.id))
-        .flatMap(sale => sale.products.filter(p => p.productId === product.id));
-
-      const totalSold = productSales.reduce((sum, sale) => sum + sale.quantity, 0);
-      const totalRevenue = productSales.reduce((sum, sale) => sum + (sale.quantity * sale.price), 0);
-      const currentStock = product.inventory ? product.inventory.quantity : 0;
-
+    // Calculate performance metrics for each inventory item
+    const performance = inventoryLogs.map(inv => {
+      const currentStock = inv.quantity || 0;
+      
       return {
-        id: product.id,
-        sku: product.sku,
-        name: product.name,
-        totalSold,
-        totalRevenue,
+        id: inv.id,
+        sku: inv.sku,
+        name: inv.productName,
         currentStock,
-        averagePrice: totalSold > 0 ? totalRevenue / totalSold : 0,
-        lastSold: productSales.length > 0 ? Math.max(...productSales.map(s => new Date(s.createdAt).getTime())) : null,
-        trend: calculateTrend(productSales),
+        price: inv.price,
+        totalValue: currentStock * (inv.price || 0),
+        lastSynced: inv.lastSynced,
         stockStatus: currentStock === 0 ? 'out_of_stock' : currentStock < 10 ? 'low_stock' : 'in_stock'
       };
     });
 
     return {
-      products: performance.sort((a, b) => b.totalRevenue - a.totalRevenue),
+      products: performance.sort((a, b) => b.totalValue - a.totalValue),
       summary: {
-        totalProducts: products.length,
-        productsWithSales: performance.filter(p => p.totalSold > 0).length,
+        totalProducts: inventoryLogs.length,
+        totalValue: performance.reduce((sum, p) => sum + p.totalValue, 0),
         lowStockProducts: performance.filter(p => p.stockStatus === 'low_stock').length,
         outOfStockProducts: performance.filter(p => p.stockStatus === 'out_of_stock').length
       }
@@ -290,27 +276,8 @@ async function getProductPerformance(locationId = null) {
     
   } catch (error) {
     console.error('Failed to get product performance:', error);
-    throw new Error('Could not load product performance data');
+    throw new Error('Could not load product performance data: ' + error.message);
   }
-}
-
-/**
- * Calculate sales trend for a product
- */
-function calculateTrend(sales) {
-  if (sales.length < 2) return 'stable';
-  
-  const recentSales = sales.slice(-5); // Last 5 sales
-  const olderSales = sales.slice(-10, -5); // Previous 5 sales
-  
-  if (olderSales.length === 0) return 'increasing';
-  
-  const recentAvg = recentSales.reduce((sum, sale) => sum + sale.quantity, 0) / recentSales.length;
-  const olderAvg = olderSales.reduce((sum, sale) => sum + sale.quantity, 0) / olderSales.length;
-  
-  if (recentAvg > olderAvg * 1.2) return 'increasing';
-  if (recentAvg < olderAvg * 0.8) return 'decreasing';
-  return 'stable';
 }
 
 module.exports = {

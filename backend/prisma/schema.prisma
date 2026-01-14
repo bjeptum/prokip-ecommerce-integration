@@ -86,16 +86,20 @@ model SalesLog {
   connectionId  Int
   orderId       String
   orderNumber   String?
+  invoiceNo     String? // Invoice number with platform prefix (WOO-123, SHOPIFY-456)
+  platform      String? // 'woocommerce', 'shopify', 'prokip'
   customerName  String?
   customerEmail String?
   totalAmount   Float
   status        String?
   orderDate     DateTime
   syncedAt      DateTime @default(now())
+  prokipSellId  String? // Reference to Prokip transaction
 
   // Relations
   connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
+  @@unique([connectionId, orderId])
   @@map("sales_logs")
 }
 
@@ -116,13 +120,13 @@ model WebhookEvent {
 }
 
 model ProkipConfig {
-  id           Int       @id @default(1)
+  id           Int       @id @default(autoincrement())
   token        String
   refreshToken String?
   expiresAt    DateTime?
   apiUrl       String
   locationId   String
-  userId       Int       @default(1)
+  userId       Int       @unique
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 

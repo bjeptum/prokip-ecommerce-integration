@@ -92,9 +92,9 @@ router.post('/sync-inventory', authenticateToken, async (req, res) => {
 router.get('/dashboard', authenticateToken, async (req, res) => {
   try {
     const userId = req.userId;
-    const { locationId, dateRange = '30d' } = req.query;
+    const { dateRange = '30d' } = req.query;
     
-    const analytics = await getDashboardAnalytics(locationId, dateRange);
+    const analytics = await getDashboardAnalytics(userId, dateRange);
     
     res.json({
       success: true,
@@ -118,9 +118,8 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
 router.get('/products', authenticateToken, async (req, res) => {
   try {
     const userId = req.userId;
-    const { locationId } = req.query;
     
-    const performance = await getProductPerformance(locationId);
+    const performance = await getProductPerformance(userId);
     
     res.json({
       success: true,

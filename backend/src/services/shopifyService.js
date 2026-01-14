@@ -90,19 +90,56 @@ async function getShopifyProducts(shop, accessToken) {
 async function createShopifyProduct(shop, accessToken, product) {
   try {
     const baseUrl = getShopifyBaseUrl(shop);
+    
+    // Create product with inventory management enabled
     const response = await axios.post(`${baseUrl}/admin/api/2026-01/products.json`, {
       product: {
         title: product.title,
         variants: [{
           sku: product.sku,
           price: product.price,
-          inventory_quantity: product.stock_quantity || 0
+          inventory_management: 'shopify', // Enable inventory tracking!
+          inventory_policy: 'deny', // Don't allow overselling
+          requires_shipping: true
         }]
       }
     }, {
       headers: { 'X-Shopify-Access-Token': accessToken }
     });
-    return response.data.product;
+    
+    const createdProduct = response.data.product;
+    
+    // If stock quantity provided, set the inventory level
+    if (product.stock_quantity !== undefined && product.stock_quantity !== null) {
+      const variant = createdProduct.variants[0];
+      const inventoryItemId = variant.inventory_item_id;
+      
+      if (inventoryItemId) {
+        try {
+          // Get locations to set inventory
+          const locations = await getShopifyLocations(shop, accessToken);
+          if (locations && locations.length > 0) {
+            const locationId = locations[0].id;
+            
+            // Set inventory level
+            await axios.post(`${baseUrl}/admin/api/2026-01/inventory_levels/set.json`, {
+              location_id: locationId,
+              inventory_item_id: inventoryItemId,
+              available: parseInt(product.stock_quantity) || 0
+            }, {
+              headers: { 'X-Shopify-Access-Token': accessToken }
+            });
+            
+            console.log(`✅ Inventory set for ${product.title}: ${product.stock_quantity} units at location ${locationId}`);
+          }
+        } catch (invError) {
+          console.error('⚠️ Could not set initial inventory:', invError.response?.data || invError.message);
+          // Don't fail product creation if inventory setting fails
+        }
+      }
+    }
+    
+    return createdProduct;
   } catch (error) {
     const message = error.response?.data?.errors || error.message;
     console.error('Failed to create Shopify product:', message);

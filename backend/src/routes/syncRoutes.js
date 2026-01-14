@@ -3,15 +3,19 @@ const { pollProkipToStores } = require('../services/syncService');
 const { PrismaClient } = require('@prisma/client');
 const { getWooOrders } = require('../services/wooService');
 const { processStoreToProkip } = require('../services/syncService');
+const authenticateToken = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-router.post('/', async (req, res) => {
-  await pollProkipToStores();
+// Apply auth middleware to routes that need user context
+router.post('/', authenticateToken, async (req, res) => {
+  const userId = req.userId;
+  await pollProkipToStores(userId);
   res.json({ success: true, message: 'Manual sync triggered' });
 });
 
+// Status endpoint doesn't require auth (public dashboard data)
 router.get('/status', async (req, res) => {
   const connections = await prisma.connection.findMany();
 
@@ -116,8 +120,14 @@ router.post('/resume', async (req, res) => {
   res.json({ success: true, message: 'Sync resumed' });
 });
 
-router.post('/pull-orders', async (req, res) => {
-  const connections = await prisma.connection.findMany({ where: { platform: 'woocommerce' } });
+router.post('/pull-orders', authenticateToken, async (req, res) => {
+  const userId = req.userId;
+  const connections = await prisma.connection.findMany({ 
+    where: { 
+      platform: 'woocommerce',
+      userId: userId
+    } 
+  });
   
   for (const conn of connections) {
     try {
@@ -125,7 +135,7 @@ router.post('/pull-orders', async (req, res) => {
       const orders = await getWooOrders(conn.storeUrl, conn.consumerKey, conn.consumerSecret, lastSync);
       
       for (const order of orders) {
-        await processStoreToProkip(conn.storeUrl, 'order.created', order, 'woocommerce');
+        await processStoreToProkip(conn.storeUrl, 'order.created', order, 'woocommerce', userId);
       }
     } catch (error) {
       console.error(`Failed to pull orders from ${conn.storeUrl}:`, error.message);
@@ -181,7 +191,7 @@ router.patch('/errors/:id/resolve', async (req, res) => {
 });
 
 // Pull sales from store
-router.post('/pull-sales', async (req, res) => {
+router.post('/pull-sales', authenticateToken, async (req, res) => {
   try {
     const { connectionId } = req.body;
     const userId = req.userId;
@@ -226,26 +236,30 @@ router.post('/pull-sales', async (req, res) => {
 });
 
 // Sync inventory and prices from Prokip to connected store
-router.post('/inventory', async (req, res) => {
+router.post('/inventory', authenticateToken, async (req, res) => {
   const { connectionId } = req.body;
+  const userId = req.userId;
   
   if (!connectionId) {
     return res.status(400).json({ error: 'Connection ID is required' });
   }
   
   try {
-    const connection = await prisma.connection.findUnique({
-      where: { id: parseInt(connectionId) }
+    const connection = await prisma.connection.findFirst({
+      where: { 
+        id: parseInt(connectionId),
+        userId: userId
+      }
     });
     
     if (!connection) {
-      return res.status(404).json({ error: 'Connection not found' });
+      return res.status(404).json({ error: 'Connection not found or access denied' });
     }
     
-    // Get Prokip products
+    // Get Prokip products - pass userId for authentication
     const prokipService = require('../services/prokipService');
-    const inventory = await prokipService.getInventory();
-    const products = await prokipService.getProducts();
+    const inventory = await prokipService.getInventory(null, userId);
+    const products = await prokipService.getProducts(null, userId);
     
     const { updateInventoryInStore } = require('../services/storeService');
     const results = [];

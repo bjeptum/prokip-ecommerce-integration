@@ -23,67 +23,42 @@ module.exports = (req, res, next) => {
     // If JWT verification fails, check if it's a Prokip token
     console.log('🔑 JWT verification failed, checking as Prokip token');
     
-    // Check if this is a Prokip route using multiple methods
-    const originalUrl = req.originalUrl || req.url || req.path;
-    const baseUrl = req.baseUrl || '';
-    const fullPath = baseUrl + (req.originalUrl || req.url || req.path);
+    // Use originalUrl directly - it already contains the full path from root
+    const originalUrl = req.originalUrl || req.url || '';
     
     console.log('🔍 Route detection debug:');
     console.log('  - originalUrl:', originalUrl);
-    console.log('  - baseUrl:', baseUrl);
-    console.log('  - path:', req.path);
-    console.log('  - fullPath:', fullPath);
     
-    // Check multiple ways to detect Prokip routes
-    const isProkipRoute = (originalUrl && originalUrl.startsWith('/prokip/')) ||
-                         (fullPath && fullPath.startsWith('/prokip/')) ||
-                         (req.path && req.path.startsWith('/prokip/')) ||
-                         (baseUrl && baseUrl.startsWith('/prokip')) ||
-                         (req.originalUrl && req.originalUrl.startsWith('/auth/prokip-'));
+    // Check if this is a Prokip-specific route
+    const isProkipRoute = originalUrl.startsWith('/prokip/') ||
+                         originalUrl.startsWith('/auth/prokip-');
     
-    if (isProkipRoute) {
-      console.log('🔍 Prokip route detected, using Prokip token validation');
-      
-      // For Prokip routes, get user from Prokip config
-      console.log('🔍 Looking for Prokip config with token...');
-      console.log('🔍 Token length:', token.length);
-      console.log('🔍 Token preview:', token.substring(0, 50) + '...');
-      
-      prisma.prokipConfig.findMany()
-        .then(allConfigs => {
-          console.log('📋 Total Prokip configs found:', allConfigs.length);
-          
-          allConfigs.forEach((config, index) => {
-            console.log(`Config ${index + 1}:`, {
-              userId: config.userId,
-              tokenLength: config.token ? config.token.length : 0,
-              tokenPreview: config.token ? config.token.substring(0, 50) + '...' : 'null',
-              locationId: config.locationId
-            });
-          });
-          
-          const prokipConfig = allConfigs.find(config => config.token === token);
-          
-          if (prokipConfig) {
-            req.userId = prokipConfig.userId;
-            req.user = { id: prokipConfig.userId };
-            console.log('✅ Prokip token validated for user:', prokipConfig.userId);
-            next();
+    // For ALL routes (Prokip or not), try to authenticate via Prokip token
+    console.log('🔍 Looking for Prokip config with token...');
+    
+    prisma.prokipConfig.findMany()
+      .then(allConfigs => {
+        console.log('📋 Total Prokip configs found:', allConfigs.length);
+        
+        const prokipConfig = allConfigs.find(config => config.token === token);
+        
+        if (prokipConfig) {
+          req.userId = prokipConfig.userId;
+          req.user = { id: prokipConfig.userId };
+          console.log('✅ Prokip token validated for user:', prokipConfig.userId);
+          next();
+        } else {
+          console.log('❌ No Prokip config found for token');
+          if (isProkipRoute) {
+            return res.status(401).json({ error: 'Invalid Prokip token - please log in again' });
           } else {
-            console.log('❌ No Prokip config found for token');
-            console.log('🔍 Trying exact match vs stored tokens...');
-            return res.status(401).json({ error: 'Invalid Prokip token - no config found' });
+            return res.status(403).json({ error: 'Invalid or expired token. Please log in again.' });
           }
-        })
-        .catch(error => {
-          console.error('❌ Error validating Prokip token:', error);
-          return res.status(500).json({ error: 'Token validation failed' });
-        });
-    } else {
-      // For non-Prokip routes, require valid JWT
-      console.log('❌ Non-Prokip route requires valid JWT');
-      console.log('🔍 Route detection failed for all methods');
-      return res.status(403).json({ error: 'Invalid or expired token' });
-    }
+        }
+      })
+      .catch(error => {
+        console.error('❌ Error validating Prokip token:', error);
+        return res.status(500).json({ error: 'Token validation failed' });
+      });
   }
 };

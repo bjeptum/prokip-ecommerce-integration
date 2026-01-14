@@ -9,16 +9,67 @@ const wooAppPasswordService = require('./wooAppPasswordService');
 async function createProductInStore(connection, product) {
   if (connection.platform === 'shopify') {
     const baseUrl = getShopifyBaseUrl(connection.storeUrl);
-    await axios.post(`${baseUrl}/admin/api/2026-01/products.json`, {
+    
+    // Create product with inventory management enabled
+    const response = await axios.post(`${baseUrl}/admin/api/2026-01/products.json`, {
       product: {
         title: product.title,
-        variants: [{ sku: product.sku, price: product.price }]
+        variants: [{
+          sku: product.sku,
+          price: product.price,
+          inventory_management: 'shopify', // Enable inventory tracking!
+          inventory_policy: 'deny', // Don't allow overselling
+          requires_shipping: true
+        }]
       }
     }, {
       headers: { 'X-Shopify-Access-Token': connection.accessToken }
     });
+    
+    const createdProduct = response.data.product;
+    
+    // Set initial inventory if stock_quantity provided
+    if (product.stock_quantity !== undefined && product.stock_quantity !== null) {
+      const variant = createdProduct.variants[0];
+      const inventoryItemId = variant.inventory_item_id;
+      
+      if (inventoryItemId) {
+        try {
+          // Get locations
+          const locations = await getShopifyLocations(connection.storeUrl, connection.accessToken);
+          if (locations && locations.length > 0) {
+            const locationId = locations[0].id;
+            
+            // Set inventory level
+            await axios.post(`${baseUrl}/admin/api/2026-01/inventory_levels/set.json`, {
+              location_id: locationId,
+              inventory_item_id: inventoryItemId,
+              available: parseInt(product.stock_quantity) || 0
+            }, {
+              headers: { 'X-Shopify-Access-Token': connection.accessToken }
+            });
+            
+            console.log(`✅ Shopify inventory set for ${product.title}: ${product.stock_quantity} units`);
+          }
+        } catch (invError) {
+          console.error('⚠️ Could not set initial Shopify inventory:', invError.response?.data || invError.message);
+        }
+      }
+    }
+    
+    return createdProduct;
   } else if (connection.platform === 'woocommerce') {
     const baseUrl = getWooBaseUrl(connection.storeUrl);
+    
+    // Product data with stock management enabled
+    const productData = {
+      name: product.name || product.title,
+      sku: product.sku,
+      regular_price: product.price?.toString() || '0',
+      manage_stock: true, // Enable stock management!
+      stock_quantity: parseInt(product.stock_quantity) || 0,
+      stock_status: (parseInt(product.stock_quantity) || 0) > 0 ? 'instock' : 'outofstock'
+    };
     
     // Try application password first, then OAuth, then legacy credentials
     if (connection.wooUsername && connection.wooAppPassword) {
@@ -28,11 +79,9 @@ async function createProductInStore(connection, product) {
         connection.wooUsername, 
         connection.wooAppPassword
       );
-      await client.post('products', {
-        name: product.name,
-        sku: product.sku,
-        regular_price: product.price.toString()
-      });
+      const response = await client.post('products', productData);
+      console.log(`✅ WooCommerce product created with stock: ${product.stock_quantity}`);
+      return response.data;
     } else if (connection.accessToken && connection.accessTokenSecret) {
       // Use OAuth authentication
       const client = wooOAuthService.createAuthenticatedClient(
@@ -40,11 +89,9 @@ async function createProductInStore(connection, product) {
         connection.accessToken, 
         connection.accessTokenSecret
       );
-      await client.post('products', {
-        name: product.name,
-        sku: product.sku,
-        regular_price: product.price.toString()
-      });
+      const response = await client.post('products', productData);
+      console.log(`✅ WooCommerce product created with stock: ${product.stock_quantity}`);
+      return response.data;
     } else {
       // Use legacy consumer key/secret authentication
       const consumerKey = connection.consumerKey || process.env.WOO_CONSUMER_KEY;
@@ -60,13 +107,15 @@ async function createProductInStore(connection, product) {
           `${baseUrl}/wp-json/wc/v3/products`,
           consumerKey,
           consumerSecret,
-          JSON.stringify({
-            name: product.name,
-            sku: product.sku,
-            regular_price: product.price.toString()
-          }),
+          JSON.stringify(productData),
           'application/json',
-          (error) => error ? reject(error) : resolve()
+          (error, data) => {
+            if (error) reject(error);
+            else {
+              console.log(`✅ WooCommerce product created with stock: ${product.stock_quantity}`);
+              resolve(JSON.parse(data));
+            }
+          }
         );
       });
     }

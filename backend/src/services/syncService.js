@@ -47,14 +47,20 @@ function isOrderPaid(data, platform) {
 /**
  * Get Prokip headers - uses prokipService for real API, falls back to direct config for mocks
  */
-async function getProkipHeaders() {
+async function getProkipHeaders(userId = null) {
   if (!MOCK_PROKIP) {
     // Use prokipService for real API (handles token refresh automatically)
-    return await prokipService.getAuthHeaders();
+    return await prokipService.getAuthHeaders(userId);
   }
   
-  // For mocks, use direct config
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+  // For mocks, use direct config - find by userId if provided
+  let prokip;
+  if (userId) {
+    prokip = await prisma.prokipConfig.findUnique({ where: { userId } });
+  } else {
+    prokip = await prisma.prokipConfig.findFirst();
+  }
+  
   if (!prokip || !prokip.token) {
     throw new Error('Prokip not configured');
   }
@@ -215,8 +221,13 @@ async function restoreInventoryInStoreAndCache(connection, sku, quantity) {
 
 /**
  * Main webhook processing function
+ * @param {string} storeUrl - Store URL
+ * @param {string} topic - Webhook topic
+ * @param {Object} data - Order/webhook data
+ * @param {string} platform - Platform (shopify/woocommerce)
+ * @param {number} userId - Optional user ID for authentication
  */
-async function processStoreToProkip(storeUrl, topic, data, platform) {
+async function processStoreToProkip(storeUrl, topic, data, platform, userId = null) {
   // Check Prokip authentication - for real API, use prokipService
   let prokip;
   let headers;
@@ -224,16 +235,19 @@ async function processStoreToProkip(storeUrl, topic, data, platform) {
   try {
     if (!MOCK_PROKIP) {
       // Real API - check authentication via service
-      const isAuthenticated = await prokipService.isAuthenticated();
+      const isAuthenticated = await prokipService.isAuthenticated(userId);
       if (!isAuthenticated) {
         console.error('Not authenticated with Prokip. Please log in first.');
         return;
       }
-      prokip = await prokipService.getProkipConfig();
-      headers = await getProkipHeaders();
+      prokip = await prokipService.getProkipConfig(userId);
+      headers = await getProkipHeaders(userId);
     } else {
       // Mock mode - use direct config
-      prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+      const findConfig = userId 
+        ? await prisma.prokipConfig.findFirst({ where: { userId } })
+        : await prisma.prokipConfig.findFirst();
+      prokip = findConfig;
       if (!prokip || !prokip.token || !prokip.locationId) {
         console.error('Prokip config not found or incomplete');
         return;
@@ -331,19 +345,27 @@ async function processStoreToProkip(storeUrl, topic, data, platform) {
       // Record sale in Prokip
       try {
         const response = await axios.post(PROKIP_BASE + 'sell', sellBody, { headers });
+        
+        // Get invoice number from the sell body (with platform prefix)
+        const invoiceNo = sellBody.sells?.[0]?.invoice_no || orderId;
+        const prokipSellId = response.data?.data?.id?.toString() || response.data?.id?.toString();
+        
         await prisma.salesLog.create({
           data: {
             connectionId: connection.id,
             orderId,
             orderNumber: data.order_number || data.number?.toString(),
+            invoiceNo: invoiceNo,
+            platform: platform,
             customerName: data.customer?.first_name || data.billing?.first_name || 'Guest',
             customerEmail: data.customer?.email || data.billing?.email,
             totalAmount: parseFloat(data.total || data.total_price || 0),
             status: 'completed',
-            orderDate: new Date(data.created_at || data.date_created)
+            orderDate: new Date(data.created_at || data.date_created),
+            prokipSellId: prokipSellId
           }
         });
-        console.log(`✓ Sale recorded in Prokip for order ${orderId}`);
+        console.log(`✓ Sale recorded in Prokip for order ${orderId} with invoice ${invoiceNo}`);
       } catch (error) {
         await logSyncError(
           connection.id,

@@ -64,12 +64,22 @@ async function mapOrderToProkipSell(data, locationId, platform) {
     discountAmount = parseFloat(data.discount_total || 0);
   }
 
+  // Generate invoice number with platform prefix to distinguish sales sources
+  const platformPrefix = {
+    'shopify': 'SHOPIFY',
+    'woocommerce': 'WOO',
+    'prokip': 'PROKIP'
+  };
+  const prefix = platformPrefix[platform.toLowerCase()] || 'ONLINE';
+  const orderId = (data.id || data.number || Date.now()).toString();
+  const invoiceNo = `${prefix}-${orderId}`;
+
   return {
     sells: [{
       location_id: parseInt(locationId),
       contact_id: 1, // default walk-in
       transaction_date: new Date(data.created_at || data.date_created).toISOString().slice(0, 19).replace('T', ' '),
-      invoice_no: (data.id || data.number).toString(),
+      invoice_no: invoiceNo,
       status: 'final',
       type: 'sell',
       payment_status: 'paid',
@@ -81,7 +91,10 @@ async function mapOrderToProkipSell(data, locationId, platform) {
         method: 'cash',
         amount: parseFloat(data.total || data.total_price),
         paid_on: new Date().toISOString().slice(0, 19).replace('T', ' ')
-      }]
+      }],
+      // Add metadata for tracking
+      platform_source: platform,
+      platform_order_id: orderId
     }]
   };
 }

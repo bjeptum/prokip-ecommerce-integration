@@ -124,51 +124,32 @@ async function saveProkipConfig(data, userId = 1) {
   
   console.log('🔍 saveProkipConfig called:');
   console.log('  - userId:', userId);
-  console.log('  - access_token length:', access_token ? access_token.length : 'null');
-  console.log('  - access_token preview:', access_token ? access_token.substring(0, 50) + '...' : 'null');
   console.log('  - locationId:', locationId);
   
   // Calculate expiration time
   const expiresAt = new Date(Date.now() + (expires_in * 1000));
 
-  // First try to find existing config for this user
-  const existingConfig = await prisma.prokipConfig.findFirst({ where: { userId } });
-  
-  console.log('  - existingConfig found:', !!existingConfig);
-  if (existingConfig) {
-    console.log('  - existing token length:', existingConfig.token ? existingConfig.token.length : 'null');
-    console.log('  - existing token preview:', existingConfig.token ? existingConfig.token.substring(0, 50) + '...' : 'null');
-  }
-  
-  if (existingConfig) {
-    // Update existing config
-    console.log('🔄 Updating existing config...');
-    await prisma.prokipConfig.update({
-      where: { id: existingConfig.id },
-      data: {
-        token: access_token,
-        refreshToken: refresh_token || null,
-        expiresAt,
-        locationId: locationId?.toString() || '',
-        updatedAt: new Date()
-      }
-    });
-    console.log('✅ Config updated successfully');
-  } else {
-    // Create new config
-    console.log('➕ Creating new config...');
-    await prisma.prokipConfig.create({
-      data: {
-        token: access_token,
-        refreshToken: refresh_token || null,
-        expiresAt,
-        apiUrl: process.env.PROKIP_API,
-        locationId: locationId?.toString() || '',
-        userId
-      }
-    });
-    console.log('✅ Config created successfully');
-  }
+  // Use upsert to handle concurrent requests safely
+  console.log('💾 Upserting Prokip config...');
+  await prisma.prokipConfig.upsert({
+    where: { userId },
+    update: {
+      token: access_token,
+      refreshToken: refresh_token || null,
+      expiresAt,
+      locationId: locationId?.toString() || '',
+      updatedAt: new Date()
+    },
+    create: {
+      token: access_token,
+      refreshToken: refresh_token || null,
+      expiresAt,
+      apiUrl: process.env.PROKIP_API,
+      locationId: locationId?.toString() || '',
+      userId
+    }
+  });
+  console.log('✅ Config saved successfully');
 }
 
 /**

@@ -300,14 +300,24 @@ router.get('/:id/analytics', async (req, res) => {
       return res.status(404).json({ error: 'Store not found' });
     }
 
-    // Get product count
+    // Get product count - try API first, fallback to cached inventory
     let productCount = 0;
-    if (connection.platform === 'shopify') {
-      const products = await getShopifyProducts(connection.storeUrl, connection.accessToken);
-      productCount = products.length;
-    } else if (connection.platform === 'woocommerce') {
-      const products = await getWooProducts(connection.storeUrl, connection.consumerKey, connection.consumerSecret);
-      productCount = products.length;
+    try {
+      if (connection.platform === 'shopify') {
+        const products = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+        productCount = products.length;
+      } else if (connection.platform === 'woocommerce') {
+        const products = await getWooProducts(connection.storeUrl, connection.consumerKey, connection.consumerSecret);
+        productCount = products.length;
+      }
+    } catch (apiError) {
+      console.log(`⚠️ Could not fetch live products from ${connection.platform}, using cached data`);
+      // Fallback to cached inventory count
+      const cachedProducts = await prisma.inventoryLog.groupBy({
+        by: ['productId'],
+        where: { connectionId }
+      });
+      productCount = cachedProducts.length;
     }
 
     // Get orders processed from SalesLog
@@ -315,14 +325,45 @@ router.get('/:id/analytics', async (req, res) => {
       where: { connectionId }
     });
 
+    // Get inventory updates count
+    const inventoryUpdates = await prisma.inventoryLog.count({
+      where: { connectionId }
+    });
+
+    // Get recent sync errors
+    const recentErrors = await prisma.syncError.count({
+      where: { 
+        connectionId,
+        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
+      }
+    });
+
+    // Calculate sync success rate
+    const totalSyncs = ordersProcessed + inventoryUpdates;
+    const syncSuccessRate = totalSyncs > 0 ? Math.round(((totalSyncs - recentErrors) / totalSyncs) * 100) : 100;
+
     res.json({
       syncedProducts: productCount,
       ordersProcessed: ordersProcessed,
-      lastSync: connection.lastSync
+      inventoryUpdates: inventoryUpdates,
+      recentErrors: recentErrors,
+      syncSuccessRate: syncSuccessRate,
+      lastSync: connection.lastSync,
+      platform: connection.platform,
+      storeUrl: connection.storeUrl
     });
   } catch (error) {
     console.error('Error fetching store analytics:', error);
-    res.status(500).json({ error: 'Failed to fetch analytics' });
+    // Return partial data even on error
+    res.json({
+      syncedProducts: 0,
+      ordersProcessed: 0,
+      inventoryUpdates: 0,
+      recentErrors: 0,
+      syncSuccessRate: 100,
+      lastSync: null,
+      error: 'Some analytics data could not be loaded'
+    });
   }
 });
 
