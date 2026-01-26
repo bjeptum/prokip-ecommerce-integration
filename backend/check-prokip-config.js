@@ -17,6 +17,7 @@ async function checkProkipConfig() {
       console.log(`   Location ID: ${config.locationId}`);
       console.log(`   Token length: ${config.token ? config.token.length : 0}`);
       console.log(`   Token preview: ${config.token ? config.token.substring(0, 50) + '...' : 'No token'}`);
+      console.log(`   Full Token: ${config.token || 'No token'}`);
       console.log(`   Expires At: ${config.expiresAt}`);
       console.log(`   Created At: ${config.createdAt}`);
     });

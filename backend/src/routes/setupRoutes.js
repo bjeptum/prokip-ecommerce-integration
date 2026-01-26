@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const { body, validationResult } = require('express-validator');
 const { PrismaClient } = require('@prisma/client');
-const { createProductInStore } = require('../services/storeService');
+const { createProductInStore, createOrUpdateProductInStore } = require('../services/storeService');
 const { getShopifyProducts } = require('../services/shopifyService');
 const { getWooProducts } = require('../services/wooService');
 const { getProkipProductIdBySku } = require('../services/prokipMapper');
@@ -16,15 +16,56 @@ const PROKIP_BASE = MOCK_PROKIP
   ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'
   : process.env.PROKIP_API + '/connector/api/';
 
-router.get('/products', authenticateToken, async (req, res) => {
-  const userId = req.userId;
-  const connections = await prisma.connection.findMany({ where: { userId } });
+// Custom authentication middleware for setup routes
+router.use(async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  // Try to verify as JWT first
+  try {
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.id;
+    req.user = decoded;
+    return next();
+  } catch (jwtError) {
+    // If JWT fails, try Prokip token
+    try {
+      const prokipConfig = await prisma.prokipConfig.findFirst({ where: { token } });
+      
+      if (prokipConfig) {
+        req.userId = prokipConfig.userId;
+        req.user = { id: prokipConfig.userId };
+        return next();
+      } else {
+        return res.status(403).json({ error: 'Invalid or expired token' });
+      }
+    } catch (dbError) {
+      console.error('Authentication error:', dbError);
+      return res.status(500).json({ error: 'Authentication failed' });
+    }
+  }
+});
+
+router.get('/products', async (req, res) => {
+  const connections = await prisma.connection.findMany();
 
   try {
     let prokipProducts = [];
     
     if (!MOCK_PROKIP) {
       // Use prokipService for real API
+      // Support both JWT and Prokip token authentication
+      const userId = req.user?.id || req.userId;
+      if (!userId) {
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
+      
       const isAuthenticated = await prokipService.isAuthenticated(userId);
       if (!isAuthenticated) {
         return res.status(401).json({ error: 'Please log in to Prokip first' });
@@ -131,6 +172,12 @@ router.get('/products/matches', authenticateToken, async (req, res) => {
     let prokipProducts = [];
     
     if (!MOCK_PROKIP) {
+      // Support both JWT and Prokip token authentication
+      const userId = req.user?.id || req.userId;
+      if (!userId) {
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
+      
       const isAuthenticated = await prokipService.isAuthenticated(userId);
       if (!isAuthenticated) {
         return res.status(401).json({ error: 'Please log in to Prokip first' });
@@ -221,22 +268,40 @@ router.post('/products/readiness-check', authenticateToken, [
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
   const { connectionId } = req.body;
-  const userId = req.userId;
   
   try {
-    const prokip = await prisma.prokipConfig.findFirst({ where: { userId } });
-    
-    if (!prokip?.token) {
-      return res.status(400).json({ error: 'Prokip config missing - please login first' });
+    // Support both JWT and Prokip token authentication
+    const userId = req.user?.id || req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
     }
+    
+    let products = [];
+    
+    if (!MOCK_PROKIP) {
+      // Use prokipService for real API
+      const isAuthenticated = await prokipService.isAuthenticated(userId);
+      if (!isAuthenticated) {
+        return res.status(401).json({ error: 'Please log in to Prokip first' });
+      }
+      
+      products = await prokipService.getProducts(null, userId);
+    } else {
+      // Mock mode
+      const prokip = await prisma.prokipConfig.findFirst({ where: { userId } });
+      
+      if (!prokip?.token) {
+        return res.status(400).json({ error: 'Prokip config missing - please login first' });
+      }
 
-  const headers = {
-    Authorization: `Bearer ${prokip.token}`,
-    Accept: 'application/json'
-  };
+      const headers = {
+        Authorization: `Bearer ${prokip.token}`,
+        Accept: 'application/json'
+      };
 
-  const response = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
-  const products = response.data.data;
+      const response = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
+      products = response.data.data;
+    }
 
   const readinessReport = products.map(product => {
     const issues = [];
@@ -392,12 +457,48 @@ router.post('/products', authenticateToken, [
 
   if (method === 'push') {
     try {
-      const response = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
-      const products = response.data.data;
+      let products = [];
+      
+      if (!MOCK_PROKIP) {
+        // Use prokipService for real API
+        const userId = req.user?.id || req.userId;
+        if (!userId) {
+          return res.status(401).json({ error: 'User not authenticated' });
+        }
+        
+        try {
+          const isAuthenticated = await prokipService.isAuthenticated(userId);
+          if (!isAuthenticated) {
+            return res.status(401).json({ error: 'Please log in to Prokip first' });
+          }
+          
+          products = await prokipService.getProducts(null, userId);
+        } catch (prokipError) {
+          console.error('Prokip API connection failed:', prokipError.message);
+          return res.status(500).json({ 
+            error: 'Push failed', 
+            details: 'Could not load products from Prokip. Please check your connection.',
+            prokipError: prokipError.message
+          });
+        }
+      } else {
+        // Mock mode - use direct API call
+        const response = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
+        products = response.data.data;
+      }
 
       const results = [];
       let successCount = 0;
       let errorCount = 0;
+
+      // Get inventory data from Prokip to include stock levels
+      let inventoryData = [];
+      try {
+        inventoryData = await prokipService.getInventory(null, userId);
+        console.log(`📊 Fetched inventory data for ${inventoryData.length} products`);
+      } catch (inventoryError) {
+        console.warn('⚠️ Could not fetch inventory data, proceeding with 0 stock:', inventoryError.message);
+      }
 
       for (const product of products) {
         if (!product.name || !product.sku) {
@@ -405,65 +506,35 @@ router.post('/products', authenticateToken, [
           continue;
         }
 
-        // Extract stock quantity from Prokip product structure
-        // Try multiple paths where qty_available might be stored
-        let stockQuantity = 0;
-        const variation = product.product_variations?.[0]?.variations?.[0];
-        if (variation) {
-          // Check variation_location_details first (location-specific stock)
-          if (variation.variation_location_details && variation.variation_location_details.length > 0) {
-            stockQuantity = parseFloat(variation.variation_location_details[0]?.qty_available || 0);
-          } else {
-            // Fall back to direct qty_available on variation
-            stockQuantity = parseFloat(variation.qty_available || 0);
-          }
-        }
-        
-        console.log(`📦 Prokip product "${product.name}" (SKU: ${product.sku}) - Stock: ${stockQuantity}`);
+        // Find stock quantity from inventory data
+        const inventoryItem = inventoryData.find(item => item.sku === product.sku || item.product_id === product.id);
+        const stockQuantity = inventoryItem ? (inventoryItem.stock || inventoryItem.qty_available || 0) : 0;
 
         const storeProduct = {
           title: product.name,
           name: product.name,
           sku: product.sku,
           price: product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0,
-          stock_quantity: Math.floor(stockQuantity) // Use actual stock from Prokip
+          stock_quantity: stockQuantity // Use actual stock from Prokip
         };
 
-        try {
-          await createProductInStore(connection, storeProduct);
-          
-          // Create or update inventory log entry with actual stock quantity
-          await prisma.inventoryLog.upsert({
-            where: {
-              connectionId_sku: {
-                connectionId: connection.id,
-                sku: product.sku
-              }
-            },
-            update: {
-              productId: product.id?.toString() || product.sku,
-              productName: product.name,
-              quantity: Math.floor(stockQuantity), // Update with actual stock
-              price: parseFloat(product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0)
-            },
-            create: {
-              connectionId: connection.id,
-              productId: product.id?.toString() || product.sku,
-              productName: product.name,
-              sku: product.sku,
-              quantity: Math.floor(stockQuantity), // Use actual stock from Prokip
-              price: parseFloat(product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0)
-            }
-          });
+        console.log(`📦 Processing product: ${product.name} (SKU: ${product.sku}, Stock: ${stockQuantity})`);
 
-          results.push({ sku: product.sku, status: 'success', stock: Math.floor(stockQuantity) });
+        try {
+          await createOrUpdateProductInStore(connection, storeProduct);
+          
+          // Don't create inventory log during push to avoid conflicts
+          // Inventory sync can be done separately
+          
+          results.push({ sku: product.sku, status: 'success', stock: stockQuantity });
           successCount++;
         } catch (error) {
           console.error(`Failed to push product ${product.sku}:`, error.message);
           results.push({ 
             sku: product.sku, 
             status: 'error', 
-            error: error.message 
+            error: error.message,
+            stock: stockQuantity
           });
           errorCount++;
         }

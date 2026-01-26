@@ -43,7 +43,7 @@ async function authenticateUser(username, password) {
       headers: { 
         'Content-Type': 'application/x-www-form-urlencoded'
       },
-      timeout: 15000 // 15 second timeout
+      timeout: 60000 // 60 second timeout
     });
 
     console.log('✅ Real Prokip authentication successful!');
@@ -126,30 +126,69 @@ async function saveProkipConfig(data, userId = 1) {
   console.log('  - userId:', userId);
   console.log('  - locationId:', locationId);
   
-  // Calculate expiration time
-  const expiresAt = new Date(Date.now() + (expires_in * 1000));
+  try {
+    // Calculate expiration time
+    const expiresAt = new Date(Date.now() + (expires_in * 1000));
 
-  // Use upsert to handle concurrent requests safely
-  console.log('💾 Upserting Prokip config...');
-  await prisma.prokipConfig.upsert({
-    where: { userId },
-    update: {
-      token: access_token,
-      refreshToken: refresh_token || null,
-      expiresAt,
-      locationId: locationId?.toString() || '',
-      updatedAt: new Date()
-    },
-    create: {
-      token: access_token,
-      refreshToken: refresh_token || null,
-      expiresAt,
-      apiUrl: process.env.PROKIP_API,
-      locationId: locationId?.toString() || '',
-      userId
+    // First try to find existing config for this user
+    const existingConfig = await prisma.prokipConfig.findFirst({ where: { userId } });
+    
+    console.log('  - existingConfig found:', !!existingConfig);
+    if (existingConfig) {
+      console.log('  - existing token length:', existingConfig.token ? existingConfig.token.length : 'null');
+      console.log('  - existing token preview:', existingConfig.token ? existingConfig.token.substring(0, 50) + '...' : 'null');
     }
-  });
-  console.log('✅ Config saved successfully');
+    
+    if (existingConfig) {
+      // Update existing config
+      console.log('🔄 Updating existing config...');
+      await prisma.prokipConfig.update({
+        where: { id: existingConfig.id },
+        data: {
+          token: access_token,
+          refreshToken: refresh_token || null,
+          expiresAt,
+          locationId: locationId?.toString() || '',
+          updatedAt: new Date()
+        }
+      });
+      console.log('✅ Config updated successfully');
+    } else {
+      // Create new config
+      console.log('➕ Creating new config...');
+      await prisma.prokipConfig.create({
+        data: {
+          token: access_token,
+          refreshToken: refresh_token || null,
+          expiresAt,
+          apiUrl: process.env.PROKIP_API,
+          locationId: locationId?.toString() || '',
+          userId
+        }
+      });
+      console.log('✅ Config created successfully');
+    }
+  } catch (error) {
+    console.error('❌ saveProkipConfig failed:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      code: error.code,
+      meta: error.meta
+    });
+    
+    // Log additional context
+    console.error('Config context:', {
+      userId,
+      locationId,
+      hasAccessToken: !!access_token,
+      accessTokenLength: access_token?.length,
+      expires_in
+    });
+    
+    throw error; // Re-throw to be handled by the calling function
+  }
 }
 
 /**
@@ -157,6 +196,9 @@ async function saveProkipConfig(data, userId = 1) {
  * @returns {Promise<string|null>} - Valid access token or null
  */
 async function getValidToken(userId = null) {
+  console.log(`🔐 getValidToken called with userId: ${userId} (type: ${typeof userId})`);
+  console.trace('🔐 Call stack:');
+  
   if (!userId) {
     console.warn('⚠️ getValidToken called without userId');
     return null;
@@ -222,7 +264,7 @@ async function getBusinessLocations(token) {
         Authorization: `Bearer ${token}`,
         Accept: 'application/json'
       },
-      timeout: 15000
+      timeout: 60000 // Increased timeout to 60 seconds
     });
     
     console.log('✅ Business locations fetched successfully');
@@ -243,6 +285,10 @@ async function getBusinessLocations(token) {
       throw new Error('Access denied. Please check your permissions.');
     }
     
+    if (error.code === 'ECONNABORTED') {
+      throw new Error('Connection timeout. Please check your internet connection and try again.');
+    }
+    
     throw new Error('Could not load your business locations. Please try again.');
   }
 }
@@ -261,6 +307,14 @@ async function getProducts(locationId = null, userId = null) {
     }
     
     console.log('🌐 Fetching products from real Prokip API for user:', userId);
+    
+    // Check if token is expired and refresh if needed
+    const isAuthenticatedStatus = await isAuthenticated(userId);
+    if (!isAuthenticatedStatus) {
+      console.warn('⚠️ Token is invalid or expired for user:', userId);
+      throw new Error('Session expired. Please log in again.');
+    }
+    
     const headers = await getAuthHeaders(userId);
     const config = await prisma.prokipConfig.findFirst({ where: { userId } });
     const locId = locationId || config?.locationId;
@@ -278,7 +332,33 @@ async function getProducts(locationId = null, userId = null) {
     console.log('🔗 Fetching from URL:', url);
     console.log('🔑 Using headers:', headers);
 
-    const response = await axios.get(url, { headers, timeout: 15000 });
+    // Add retry logic for connection issues
+    let response;
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      try {
+        response = await axios.get(url, { 
+          headers, 
+          timeout: 15000,
+          // Add connection keep-alive for better reliability
+          family: 4 // Force IPv4
+        });
+        break; // Success, exit retry loop
+      } catch (error) {
+        retryCount++;
+        console.warn(`🔄 Retry ${retryCount}/${maxRetries} for Prokip API:`, error.message);
+        
+        if (retryCount >= maxRetries) {
+          throw error; // Re-throw the last error
+        }
+        
+        // Wait before retry (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+      }
+    }
+    
     console.log('📡 Products response status:', response.status);
     console.log('📦 Products response data structure:', Object.keys(response.data));
     
@@ -298,6 +378,10 @@ async function getProducts(locationId = null, userId = null) {
     
     if (error.response?.status === 403) {
       throw new Error('Access denied. Please check your permissions.');
+    }
+    
+    if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+      throw new Error('Could not connect to Prokip API. Please check your internet connection and try again.');
     }
     
     throw new Error('Could not load products from Prokip. Please check your connection.');
@@ -517,10 +601,15 @@ async function updateProductStock(productId, quantity, locationId = null, userId
 
 /**
  * Get Prokip config from database
+ * @param {number} userId - User ID (optional, defaults to first record)
  * @returns {Promise<Object|null>} - Prokip config or null
  */
-async function getProkipConfig() {
-  return await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+async function getProkipConfig(userId = null) {
+  if (userId) {
+    return await prisma.prokipConfig.findFirst({ where: { userId } });
+  } else {
+    return await prisma.prokipConfig.findFirst();
+  }
 }
 
 /**
@@ -550,8 +639,25 @@ async function getSales(locationId = null, startDate = null, endDate = null, use
     const response = await axios.get(url, { headers });
     return response.data.data || [];
   } catch (error) {
-    console.error('Failed to fetch Prokip sales:', error.response?.data || error.message);
-    throw new Error('Could not load sales from Prokip. Please check your connection.');
+    console.error('❌ Failed to fetch Prokip sales:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      code: error.code,
+      meta: error.meta
+    });
+    
+    // Log additional context
+    console.error('Sales context:', {
+      userId,
+      locationId,
+      hasAccessToken: !!access_token,
+      accessTokenLength: access_token?.length,
+      expires_in
+    });
+    
+    throw error; // Re-throw to be handled by the calling function
   }
 }
 
@@ -619,13 +725,22 @@ async function isAuthenticated(userId = null) {
 }
 
 /**
- * Clear Prokip authentication
+ * Clear Prokip authentication for a specific user
+ * @param {number} userId - User ID (optional, defaults to clearing all)
  */
-async function clearAuthentication() {
+async function clearAuthentication(userId = null) {
   try {
-    await prisma.prokipConfig.delete({ where: { id: 1 } });
+    if (userId) {
+      // Clear specific user's config
+      await prisma.prokipConfig.deleteMany({ where: { userId } });
+      console.log(`✅ Cleared Prokip authentication for user ${userId}`);
+    } else {
+      // Clear all configs (fallback)
+      await prisma.prokipConfig.deleteMany({});
+      console.log('✅ Cleared all Prokip authentication');
+    }
   } catch (error) {
-    // Ignore if config doesn't exist
+    console.log('⚠️ No Prokip config to clear or clear failed:', error.message);
   }
 }
 

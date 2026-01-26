@@ -8,6 +8,40 @@ const prokipService = require('../services/prokipService');
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// Authentication middleware for logout
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    // For logout, we allow it without token but will clear all if no token
+    return next();
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  // Try to verify as JWT first
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.id;
+    req.user = decoded;
+    return next();
+  } catch (jwtError) {
+    // If JWT fails, try Prokip token
+    // Look for Prokip config by token directly (avoid calling getValidToken without userId)
+    prisma.prokipConfig.findFirst({ where: { token } }).then(config => {
+      if (config) {
+        req.userId = config.userId;
+        req.user = { id: config.userId };
+        return next();
+      }
+      return next();
+    }).catch(error => {
+      console.error('Prokip token validation error:', error);
+      return next();
+    });
+  }
+};
+
 router.post('/register', [
   body('username').notEmpty().trim(),
   body('password').isLength({ min: 6 }),
@@ -171,6 +205,19 @@ router.post('/prokip-location', [
     });
   } catch (error) {
     console.error('Failed to save Prokip location:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
+    
+    // Log additional context
+    console.error('Request context:', {
+      body: req.body,
+      locationId: req.body?.locationId,
+      username: req.body?.username
+    });
+    
     res.status(500).json({ 
       error: 'Could not save your location. Please try again.',
       details: error.message 
@@ -226,11 +273,23 @@ router.get('/prokip-status', async (req, res) => {
 /**
  * Logout from Prokip
  */
-router.post('/prokip-logout', async (req, res) => {
+router.post('/prokip-logout', authenticateToken, async (req, res) => {
   try {
-    await prokipService.clearAuthentication();
+    // Get userId from authentication middleware
+    const userId = req.userId || req.user?.id;
+    
+    if (userId) {
+      await prokipService.clearAuthentication(userId);
+      console.log(`✅ User ${userId} logged out successfully`);
+    } else {
+      // Fallback: clear all if no specific user
+      await prokipService.clearAuthentication();
+      console.log('⚠️ Logout called without user ID - cleared all authentication');
+    }
+    
     res.json({ success: true, message: 'Logged out successfully' });
   } catch (error) {
+    console.error('Logout error:', error);
     res.status(500).json({ error: 'Logout failed' });
   }
 });

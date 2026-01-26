@@ -3,9 +3,79 @@ const { PrismaClient } = require('@prisma/client');
 const { getShopifyProducts, getShopifyOrders } = require('../services/shopifyService');
 const { getWooProducts, getWooOrders } = require('../services/wooService');
 const wooSimpleAppPassword = require('../services/wooSimpleAppPassword');
+const wooSecureService = require('../services/wooSecureService');
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Custom authentication middleware for store routes
+router.use(async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  // Try to verify as JWT first
+  try {
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.id;
+    req.user = decoded;
+    return next();
+  } catch (jwtError) {
+    // If JWT fails, try Prokip token
+    try {
+      const prokipConfig = await prisma.prokipConfig.findFirst({ where: { token } });
+      
+      if (prokipConfig) {
+        req.userId = prokipConfig.userId;
+        req.user = { id: prokipConfig.userId };
+        return next();
+      } else {
+        return res.status(403).json({ error: 'Invalid or expired token' });
+      }
+    } catch (dbError) {
+      console.error('Authentication error:', dbError);
+      return res.status(500).json({ error: 'Authentication failed' });
+    }
+  }
+});
+
+/**
+ * Helper function to decrypt Consumer Key/Secret if encrypted
+ */
+function decryptCredentials(connection) {
+  let consumerKey = connection.consumerKey;
+  let consumerSecret = connection.consumerSecret;
+  
+  // Check if credentials are encrypted (they will be JSON objects with "encrypted" field)
+  if (consumerKey && typeof consumerKey === 'string' && consumerKey.startsWith('{"encrypted":')) {
+    try {
+      const encryptedData = JSON.parse(consumerKey);
+      consumerKey = wooSecureService.decrypt(encryptedData);
+      console.log('✅ Consumer Key decrypted successfully');
+    } catch (error) {
+      console.error('❌ Failed to decrypt Consumer Key:', error.message);
+      throw new Error('Failed to decrypt Consumer Key');
+    }
+  }
+  
+  if (consumerSecret && typeof consumerSecret === 'string' && consumerSecret.startsWith('{"encrypted":')) {
+    try {
+      const encryptedData = JSON.parse(consumerSecret);
+      consumerSecret = wooSecureService.decrypt(encryptedData);
+      console.log('✅ Consumer Secret decrypted successfully');
+    } catch (error) {
+      console.error('❌ Failed to decrypt Consumer Secret:', error.message);
+      throw new Error('Failed to decrypt Consumer Secret');
+    }
+  }
+  
+  return { consumerKey, consumerSecret };
+}
 
 /**
  * Find working Consumer Key connection for the same domain
@@ -37,8 +107,11 @@ async function findWorkingConsumerKey(storeUrl) {
       try {
         console.log(`Testing Consumer Key connection: ${conn.storeUrl} (ID: ${conn.id})`);
         
+        // Decrypt credentials before using them
+        const { consumerKey, consumerSecret } = decryptCredentials(conn);
+        
         // Quick test with just 1 product
-        const testProducts = await getWooProducts(conn.storeUrl, conn.consumerKey, conn.consumerSecret);
+        const testProducts = await getWooProducts(conn.storeUrl, consumerKey, consumerSecret);
         console.log(`✅ Working Consumer Key found: ${conn.storeUrl} (${testProducts.length} products)`);
         return conn;
       } catch (error) {
@@ -55,8 +128,109 @@ async function findWorkingConsumerKey(storeUrl) {
 }
 
 /**
- * Enhanced WooCommerce product fetching with fallback to working Consumer Key
+ * Enhanced WooCommerce order fetching with fallback to working Consumer Key
  */
+async function fetchWooCommerceOrders(connection) {
+  let lastError = null;
+  
+  // Strategy 1: Try Application Password first
+  if (connection.wooUsername && connection.wooAppPassword) {
+    console.log('🔐 Strategy 1: Using Application Password for orders');
+    
+    try {
+      // Test if Application Password has WooCommerce permissions
+      const capabilityCheck = await wooSimpleAppPassword.checkWooCommerceCapabilities(
+        connection.storeUrl,
+        connection.wooUsername,
+        connection.wooAppPassword
+      );
+      
+      if (capabilityCheck.success) {
+        console.log('✅ Application Password has WooCommerce permissions for orders');
+        
+        // Fetch orders using Application Password
+        const rawOrders = await getWooOrders(
+          connection.storeUrl,
+          null, null, null, null,
+          connection.wooUsername,
+          connection.wooAppPassword
+        );
+        
+        console.log(`✅ Application Password successful for orders: ${rawOrders.length} orders`);
+        return rawOrders;
+      } else {
+        console.log('❌ Application Password lacks WooCommerce permissions for orders');
+        console.log(`Issue: ${capabilityCheck.issue}`);
+        console.log(`Message: ${capabilityCheck.message}`);
+        lastError = new Error(capabilityCheck.message);
+      }
+    } catch (error) {
+      console.log('❌ Application Password failed for orders:', error.message);
+      lastError = error;
+    }
+  }
+  
+  // Strategy 2: Try Consumer Key/Secret if available
+  if (connection.consumerKey && connection.consumerSecret) {
+    console.log('🔑 Strategy 2: Using Consumer Key/Secret for orders');
+    
+    try {
+      // Decrypt credentials before using them
+      const { consumerKey, consumerSecret } = decryptCredentials(connection);
+      
+      const rawOrders = await getWooOrders(
+        connection.storeUrl,
+        consumerKey,
+        consumerSecret
+      );
+      
+      console.log(`✅ Consumer Key/Secret successful for orders: ${rawOrders.length} orders`);
+      return rawOrders;
+    } catch (error) {
+      console.log('❌ Consumer Key/Secret failed for orders:', error.message);
+      console.log('❌ Full error details:', {
+        storeUrl: connection.storeUrl,
+        consumerKey: consumerKey ? 'present' : 'missing',
+        consumerSecret: consumerSecret ? 'present' : 'missing',
+        errorMessage: error.message,
+        responseStatus: error.response?.status,
+        responseData: error.response?.data
+      });
+      lastError = error;
+    }
+  }
+  
+  // Strategy 3: Fallback to working Consumer Key from same domain
+  console.log('🔄 Strategy 3: Looking for working Consumer Key fallback for orders');
+  const fallbackConnection = await findWorkingConsumerKey(connection.storeUrl);
+  
+  if (fallbackConnection) {
+    console.log(`🔄 Using fallback Consumer Key for orders: ${fallbackConnection.storeUrl}`);
+    
+    try {
+      // Decrypt fallback credentials before using them
+      const { consumerKey, consumerSecret } = decryptCredentials(fallbackConnection);
+      
+      const rawOrders = await getWooOrders(
+        fallbackConnection.storeUrl,
+        consumerKey,
+        consumerSecret
+      );
+      
+      console.log(`✅ Fallback successful for orders: ${rawOrders.length} orders`);
+      return rawOrders;
+    } catch (error) {
+      console.log('❌ Fallback failed for orders:', error.message);
+      lastError = error;
+    }
+  } else {
+    console.log('❌ No working Consumer Key fallback found for orders');
+  }
+  
+  // All strategies failed
+  console.log('❌ All authentication strategies failed for orders');
+  throw lastError || new Error('Unable to fetch orders with any available authentication method');
+}
 async function fetchWooCommerceProducts(connection) {
   let lastError = null;
   
@@ -102,10 +276,13 @@ async function fetchWooCommerceProducts(connection) {
     console.log('🔑 Strategy 2: Using Consumer Key/Secret');
     
     try {
+      // Decrypt credentials before using them
+      const { consumerKey, consumerSecret } = decryptCredentials(connection);
+      
       const rawProducts = await getWooProducts(
         connection.storeUrl,
-        connection.consumerKey,
-        connection.consumerSecret
+        consumerKey,
+        consumerSecret
       );
       
       console.log(`✅ Consumer Key/Secret successful: ${rawProducts.length} products`);
@@ -124,10 +301,13 @@ async function fetchWooCommerceProducts(connection) {
     console.log(`🔄 Using fallback Consumer Key: ${fallbackConnection.storeUrl}`);
     
     try {
+      // Decrypt fallback credentials before using them
+      const { consumerKey, consumerSecret } = decryptCredentials(fallbackConnection);
+      
       const rawProducts = await getWooProducts(
         fallbackConnection.storeUrl,
-        fallbackConnection.consumerKey,
-        fallbackConnection.consumerSecret
+        consumerKey,
+        consumerSecret
       );
       
       console.log(`✅ Fallback successful: ${rawProducts.length} products`);
@@ -145,7 +325,224 @@ async function fetchWooCommerceProducts(connection) {
   throw lastError || new Error('Unable to fetch products with any available authentication method');
 }
 
-// Get products for a specific store
+// Dynamic endpoint - find user's WooCommerce connection automatically
+router.get('/my-store/products', async (req, res) => {
+  try {
+    // Get user's Prokip config to ensure location-based isolation
+    const prokipConfig = await prisma.prokipConfig.findFirst({
+      where: { userId: req.userId }
+    });
+
+    if (!prokipConfig) {
+      return res.status(404).json({ error: 'No Prokip configuration found for this user' });
+    }
+
+    // Get connection ID from query parameter or use the first one as fallback
+    let connectionId = req.query.connectionId;
+    
+    if (connectionId) {
+      // Use specific connection ID
+      connectionId = parseInt(connectionId);
+    } else {
+      // Fallback: find first WooCommerce connection (backward compatibility)
+      const firstConnection = await prisma.connection.findFirst({
+        where: { 
+          platform: 'woocommerce',
+          userId: req.userId
+        }
+      });
+      connectionId = firstConnection?.id;
+    }
+
+    if (!connectionId) {
+      return res.status(404).json({ error: 'No WooCommerce store found for this user' });
+    }
+
+    // Find the specific connection
+    const connection = await prisma.connection.findFirst({
+      where: { 
+        id: connectionId,
+        platform: 'woocommerce',
+        userId: req.userId
+      }
+    });
+
+    if (!connection) {
+      return res.status(404).json({ error: 'WooCommerce store not found' });
+    }
+
+    console.log(`📦 Fetching products for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}`);
+    
+    let products = [];
+    
+    if (connection.platform === 'woocommerce') {
+      // Use the enhanced WooCommerce product fetching
+      products = await fetchWooCommerceProducts(connection);
+      
+      // Add location information to each product for frontend filtering
+      products = products.map(product => ({
+        ...product,
+        locationId: prokipConfig.locationId,
+        userId: req.userId
+      }));
+    }
+
+    res.json({ 
+      products: products,
+      connectionId: connection.id,
+      storeUrl: connection.storeUrl,
+      locationId: prokipConfig.locationId,
+      userId: req.userId
+    });
+    
+  } catch (error) {
+    console.error('Error fetching products:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch products',
+      details: error.message 
+    });
+  }
+});
+
+// Dynamic endpoint - find user's WooCommerce orders automatically  
+router.get('/my-store/orders', async (req, res) => {
+  try {
+    // Get user's Prokip config to ensure location-based isolation
+    const prokipConfig = await prisma.prokipConfig.findFirst({
+      where: { userId: req.userId }
+    });
+
+    if (!prokipConfig) {
+      return res.status(404).json({ error: 'No Prokip configuration found for this user' });
+    }
+
+    // Get connection ID from query parameter or use the first one as fallback
+    let connectionId = req.query.connectionId;
+    
+    if (connectionId) {
+      // Use specific connection ID
+      connectionId = parseInt(connectionId);
+    } else {
+      // Fallback: find first WooCommerce connection (backward compatibility)
+      const firstConnection = await prisma.connection.findFirst({
+        where: { 
+          platform: 'woocommerce',
+          userId: req.userId
+        }
+      });
+      connectionId = firstConnection?.id;
+    }
+
+    if (!connectionId) {
+      return res.status(404).json({ error: 'No WooCommerce store found for this user' });
+    }
+
+    // Find the specific connection
+    const connection = await prisma.connection.findFirst({
+      where: { 
+        id: connectionId,
+        platform: 'woocommerce',
+        userId: req.userId
+      }
+    });
+
+    if (!connection) {
+      return res.status(404).json({ error: 'WooCommerce store not found' });
+    }
+
+    console.log(`💰 Fetching orders for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}`);
+    
+    let orders = [];
+    
+    if (connection.platform === 'woocommerce') {
+      orders = await fetchWooCommerceOrders(connection);
+      
+      // Add location information to each order for frontend filtering
+      orders = orders.map(order => ({
+        ...order,
+        locationId: prokipConfig.locationId,
+        userId: req.userId
+      }));
+    }
+
+    res.json({ 
+      orders: orders,
+      connectionId: connection.id,
+      storeUrl: connection.storeUrl,
+      locationId: prokipConfig.locationId,
+      userId: req.userId
+    });
+    
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch orders',
+      details: error.message 
+    });
+  }
+});
+
+// Dynamic endpoint - find user's WooCommerce analytics automatically
+router.get('/my-store/analytics', async (req, res) => {
+  try {
+    // Get user's Prokip config to ensure location-based isolation
+    const prokipConfig = await prisma.prokipConfig.findFirst({
+      where: { userId: req.userId }
+    });
+
+    if (!prokipConfig) {
+      return res.status(404).json({ error: 'No Prokip configuration found for this user' });
+    }
+
+    // Find WooCommerce connection for current user and location
+    const connection = await prisma.connection.findFirst({
+      where: { 
+        platform: 'woocommerce',
+        userId: req.userId 
+      }
+    });
+
+    if (!connection) {
+      return res.status(404).json({ error: 'No WooCommerce store found for this user' });
+    }
+
+    console.log(`📊 Fetching analytics for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}`);
+    
+    // Get product count
+    let productCount = 0;
+    if (connection.platform === 'woocommerce') {
+      // Use enhanced WooCommerce product fetching with decryption
+      const products = await fetchWooCommerceProducts(connection);
+      productCount = products.length;
+    }
+
+    // Get orders processed from SalesLog - filtered by user and location
+    const ordersProcessed = await prisma.salesLog.count({
+      where: { 
+        connectionId: connection.id,
+        // Add additional filtering by location if available in SalesLog
+        ...(prokipConfig.locationId && { locationId: prokipConfig.locationId })
+      }
+    });
+
+    res.json({
+      syncedProducts: productCount,
+      ordersProcessed: ordersProcessed,
+      lastSync: connection.lastSync,
+      connectionId: connection.id,
+      storeUrl: connection.storeUrl,
+      locationId: prokipConfig.locationId,
+      userId: req.userId
+    });
+    
+  } catch (error) {
+    console.error('Error fetching analytics:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch analytics',
+      details: error.message 
+    });
+  }
+});
 router.get('/:id/products', async (req, res) => {
   try {
     const connectionId = parseInt(req.params.id);
@@ -302,22 +699,13 @@ router.get('/:id/analytics', async (req, res) => {
 
     // Get product count - try API first, fallback to cached inventory
     let productCount = 0;
-    try {
-      if (connection.platform === 'shopify') {
-        const products = await getShopifyProducts(connection.storeUrl, connection.accessToken);
-        productCount = products.length;
-      } else if (connection.platform === 'woocommerce') {
-        const products = await getWooProducts(connection.storeUrl, connection.consumerKey, connection.consumerSecret);
-        productCount = products.length;
-      }
-    } catch (apiError) {
-      console.log(`⚠️ Could not fetch live products from ${connection.platform}, using cached data`);
-      // Fallback to cached inventory count
-      const cachedProducts = await prisma.inventoryLog.groupBy({
-        by: ['productId'],
-        where: { connectionId }
-      });
-      productCount = cachedProducts.length;
+    if (connection.platform === 'shopify') {
+      const products = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+      productCount = products.length;
+    } else if (connection.platform === 'woocommerce') {
+      // Use correct credential fields
+      const products = await getWooProducts(connection.storeUrl, connection.wooUsername, connection.wooAppPassword);
+      productCount = products.length;
     }
 
     // Get orders processed from SalesLog

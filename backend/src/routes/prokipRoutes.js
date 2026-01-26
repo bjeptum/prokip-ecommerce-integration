@@ -16,11 +16,15 @@ const PROKIP_BASE = MOCK_PROKIP
 /**
  * Helper to get Prokip headers (handles real vs mock API)
  */
-async function getHeaders() {
+async function getHeaders(userId = null) {
   if (!MOCK_PROKIP) {
-    return await prokipService.getAuthHeaders();
+    return await prokipService.getAuthHeaders(userId);
   }
-  const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+  
+  // For mock API, get current user's config
+  const whereClause = userId ? { userId } : { id: 1 };
+  const prokip = await prisma.prokipConfig.findFirst({ where: whereClause });
+  
   return {
     Authorization: `Bearer ${prokip?.token}`,
     'Content-Type': 'application/json',
@@ -40,22 +44,52 @@ router.get('/products', authenticateToken, async (req, res) => {
       return res.status(401).json({ error: 'User not authenticated' });
     }
     
+    // Get user's Prokip config to get locationId
+    const prokipConfig = await prisma.prokipConfig.findFirst({
+      where: { userId }
+    });
+    
+    if (!prokipConfig) {
+      return res.status(404).json({ error: 'No Prokip configuration found for this user' });
+    }
+    
     let products;
     
     if (!MOCK_PROKIP) {
-      // Use prokipService for real API
+      // Use prokipService for real API with locationId
       console.log('📡 Using real Prokip API (not mock)');
-      products = await prokipService.getProducts(null, userId);
+      console.log('📍 Location ID:', prokipConfig.locationId);
+      products = await prokipService.getProducts(prokipConfig.locationId, userId);
     } else {
       console.log('📡 Using mock Prokip API');
+      console.log('📍 Location ID:', prokipConfig.locationId);
       const headers = await getHeaders(userId);
-      const response = await axios.get(PROKIP_BASE + 'product?per_page=-1', { headers });
+      
+      // Add locationId to the API call
+      let url = PROKIP_BASE + 'product?per_page=-1';
+      if (prokipConfig.locationId) {
+        url += `&location_id=${prokipConfig.locationId}`;
+      }
+      
+      const response = await axios.get(url, { headers });
       products = response.data.data || [];
     }
     
     console.log('📦 Prokip products loaded:', products.length);
     console.log('📦 Sample product:', products[0]);
-    res.json({ products: products });
+    
+    // Add location information to each product
+    products = products.map(product => ({
+      ...product,
+      locationId: prokipConfig.locationId,
+      userId: userId
+    }));
+    
+    res.json({ 
+      products: products,
+      locationId: prokipConfig.locationId,
+      userId: userId
+    });
   } catch (error) {
     console.error('❌ Failed to fetch products:', error.message);
     console.error('❌ Full error object:', error);
@@ -528,27 +562,68 @@ router.get('/sales', authenticateToken, async (req, res) => {
       return res.status(401).json({ error: 'User not authenticated' });
     }
     
+    // Get user's Prokip config to get locationId
+    const prokipConfig = await prisma.prokipConfig.findFirst({
+      where: { userId }
+    });
+    
+    if (!prokipConfig) {
+      return res.status(404).json({ error: 'No Prokip configuration found for this user' });
+    }
+    
     let sales;
     
     if (!MOCK_PROKIP) {
       // Use prokipService for real API
-      const { startDate, endDate, locationId } = req.query;
-      console.log('📊 Fetching sales with params:', { startDate, endDate, locationId });
+      const { startDate, endDate } = req.query;
+      console.log('📊 Fetching sales with params:', { 
+        startDate, 
+        endDate, 
+        locationId: prokipConfig.locationId 
+      });
       
-      // Get sales from real Prokip API
+      // Get sales from real Prokip API with locationId
       const headers = await prokipService.getAuthHeaders(userId);
-      const response = await axios.get(`${process.env.PROKIP_API}/connector/api/sell?per_page=-1`, { headers });
+      let url = `${process.env.PROKIP_API}/connector/api/sell?per_page=-1`;
+      if (prokipConfig.locationId) {
+        url += `&location_id=${prokipConfig.locationId}`;
+      }
+      if (startDate) {
+        url += `&start_date=${startDate}`;
+      }
+      if (endDate) {
+        url += `&end_date=${endDate}`;
+      }
+      
+      const response = await axios.get(url, { headers });
       sales = response.data.data || [];
       
       console.log('📦 Sales loaded from real API:', sales.length);
     } else {
       // Use mock API
       const headers = await getHeaders(userId);
-      const response = await axios.get(PROKIP_BASE + 'sell?per_page=-1', { headers });
+      let url = PROKIP_BASE + 'sell?per_page=-1';
+      if (prokipConfig.locationId) {
+        url += `&location_id=${prokipConfig.locationId}`;
+      }
+      
+      const response = await axios.get(url, { headers });
       sales = response.data.data || [];
     }
     
-    res.json({ success: true, sales });
+    // Add location information to each sale
+    sales = sales.map(sale => ({
+      ...sale,
+      locationId: prokipConfig.locationId,
+      userId: userId
+    }));
+    
+    res.json({ 
+      success: true, 
+      sales,
+      locationId: prokipConfig.locationId,
+      userId: userId
+    });
   } catch (error) {
     console.error('Failed to fetch sales:', error.message);
     console.error('Full error:', error);
@@ -571,24 +646,59 @@ router.get('/purchases', authenticateToken, async (req, res) => {
       return res.status(401).json({ error: 'User not authenticated' });
     }
     
+    // Get user's Prokip config to get locationId
+    const prokipConfig = await prisma.prokipConfig.findFirst({
+      where: { userId }
+    });
+    
+    if (!prokipConfig) {
+      return res.status(404).json({ error: 'No Prokip configuration found for this user' });
+    }
+    
     let purchases;
     
     if (!MOCK_PROKIP) {
       // Use prokipService for real API
-      const { startDate, endDate, locationId } = req.query;
-      console.log('📊 Fetching purchases with params:', { startDate, endDate, locationId });
+      const { startDate, endDate } = req.query;
+      console.log('📊 Fetching purchases with params:', { 
+        startDate, 
+        endDate, 
+        locationId: prokipConfig.locationId 
+      });
       
       // Get purchases from real Prokip API using improved service function
-      purchases = await prokipService.getPurchases(locationId, startDate, endDate, userId);
+      purchases = await prokipService.getPurchases(
+        prokipConfig.locationId, 
+        startDate, 
+        endDate, 
+        userId
+      );
       console.log('📦 Purchases loaded from real API:', purchases.length);
     } else {
       // Use mock API
       const headers = await getHeaders(userId);
-      const response = await axios.get(PROKIP_BASE + 'purchase?per_page=-1', { headers });
+      let url = PROKIP_BASE + 'purchase?per_page=-1';
+      if (prokipConfig.locationId) {
+        url += `&location_id=${prokipConfig.locationId}`;
+      }
+      
+      const response = await axios.get(url, { headers });
       purchases = response.data.data || [];
     }
     
-    res.json({ success: true, purchases });
+    // Add location information to each purchase
+    purchases = purchases.map(purchase => ({
+      ...purchase,
+      locationId: prokipConfig.locationId,
+      userId: userId
+    }));
+    
+    res.json({ 
+      success: true, 
+      purchases,
+      locationId: prokipConfig.locationId,
+      userId: userId
+    });
   } catch (error) {
     console.error('Failed to fetch purchases:', error.message);
     console.error('Full error:', error);

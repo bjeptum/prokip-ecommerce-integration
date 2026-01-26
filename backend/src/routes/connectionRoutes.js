@@ -604,6 +604,17 @@ router.post('/prokip', [
   res.json({ success: true });
 });
 
+// Get all connections
+router.get('/', async (req, res) => {
+  try {
+    const connections = await prisma.connection.findMany();
+    res.json(connections);
+  } catch (error) {
+    console.error('Failed to fetch connections:', error);
+    res.status(500).json({ error: 'Failed to fetch connections' });
+  }
+});
+
 // Get connections status with enhanced data for dashboard
 router.get('/status', async (req, res) => {
   try {

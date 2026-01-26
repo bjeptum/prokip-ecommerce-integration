@@ -424,6 +424,20 @@ async function selectBusinessLocation(location) {
   document.getElementById('profile-username').textContent = currentUser?.email || 'User';
   document.getElementById('profile-location').textContent = location.name;
 
+  // Refresh Prokip data for the new location
+  console.log('🔄 Refreshing Prokip data for new location:', location.name);
+  try {
+    // Load fresh data for the new location
+    await Promise.all([
+      loadProkipProducts(),
+      loadProkipSales(),
+      loadProkipPurchases()
+    ]);
+    console.log('✅ Prokip data refreshed for new location');
+  } catch (error) {
+    console.error('❌ Failed to refresh Prokip data:', error);
+  }
+
   showDashboard();
 }
 
@@ -726,7 +740,7 @@ function updateDashboardStats(data) {
   document.getElementById('total-stores').textContent = totalStores;
   document.getElementById('total-products').textContent = totalProducts;
   document.getElementById('total-orders').textContent = totalOrders;
-  document.getElementById('sync-status').textContent = 'Active';
+  document.getElementById('dashboard-sync-status').textContent = 'Active';
 
   // Update Prokip-specific stats
   document.getElementById('prokip-products').textContent = prokip.products;
@@ -1304,7 +1318,36 @@ async function loadStoreProducts() {
   content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading products...</p>';
 
   try {
-    const products = await apiCall(`/stores/${selectedStore.id}/products`);
+    // Use dynamic endpoint with connection ID parameter
+    const response = await apiCall(`/stores/my-store/products?connectionId=${selectedStore.id}`);
+    
+    // Handle different response formats
+    let products = response.products || response;
+    
+    // Ensure products is an array
+    if (!Array.isArray(products)) {
+      console.error('Products is not an array:', products);
+      products = [];
+    }
+    
+    // Sort products: in-stock items first, then out-of-stock
+    products.sort((a, b) => {
+      const stockA = parseInt(a.stock_quantity) || 0;
+      const stockB = parseInt(b.stock_quantity) || 0;
+      
+      // Sort by stock (descending), so items with stock appear first
+      if (stockB !== stockA) {
+        return stockB - stockA;
+      }
+      
+      // If stock is same, sort by name alphabetically
+      return a.name.localeCompare(b.name);
+    });
+    
+    console.log('Products response:', response);
+    console.log('Extracted products:', products);
+    console.log('🔄 FRONTEND SORTING ACTIVE - Products sorted by stock level');
+    
     displayProducts(products);
   } catch (error) {
     console.error('Failed to load products:', error);
@@ -1341,14 +1384,25 @@ async function loadStoreProducts() {
 function displayProducts(products) {
   const content = document.getElementById('products-content');
   
+  // Display location information
+  const locationInfo = currentBusinessLocation ? 
+    `<div style="margin-bottom: 20px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+      <strong><i class="fas fa-map-marker-alt"></i> Business Location:</strong> ${currentBusinessLocation.name || 'N/A'}
+      ${currentBusinessLocation.id ? `<span style="margin-left: 10px; color: #666;">(ID: ${currentBusinessLocation.id})</span>` : ''}
+    </div>` : '';
+  
   if (products.length === 0) {
     content.innerHTML = `
+      ${locationInfo}
       <div class="empty-state-card">
         <div class="empty-state-icon">
           <i class="fas fa-box-open"></i>
         </div>
         <h3>No Products Found</h3>
-        <p>This store doesn't have any products yet. Click "Sync Products" to push products from Prokip.</p>
+        <p>This store doesn't have any products yet, or they couldn't be loaded.</p>
+        <button onclick="loadStoreProducts()" class="btn-primary">
+          <i class="fas fa-sync"></i> Retry
+        </button>
       </div>
     `;
     return;
@@ -1358,10 +1412,16 @@ function displayProducts(products) {
   const storeName = selectedStore?.storeName || selectedStore?.storeUrl || 'Store';
 
   content.innerHTML = `
+    ${locationInfo}
     <div class="content-card">
       <div class="card-header">
-        <h3><i class="fas fa-box"></i> Product Catalog - ${storeName}</h3>
-        <span class="badge">${products.length} ${products.length === 1 ? 'Product' : 'Products'}</span>
+        <h3><i class="fas fa-cube"></i> Products from ${storeName}</h3>
+        <div class="header-stats">
+          <span class="badge">${products.length} ${products.length === 1 ? 'Product' : 'Products'}</span>
+          <span class="location-badge">
+            <i class="fas fa-map-marker-alt"></i> ${currentBusinessLocation?.name || 'Unknown Location'}
+          </span>
+        </div>
       </div>
       <div class="table-responsive">
         <table class="data-table">
@@ -1385,7 +1445,7 @@ function displayProducts(products) {
                 </td>
                 <td><code class="sku-code">${product.sku || 'N/A'}</code></td>
                 <td><strong class="price-text">${currency} ${parseFloat(product.price || 0).toLocaleString()}</strong></td>
-                <td><span class="stock-badge ${(product.stock || 0) > 0 ? 'stock-in' : 'stock-out'}">${product.stock || 0} units</span></td>
+                <td><span class="stock-badge ${(product.stock_quantity || 0) > 0 ? 'stock-in' : 'stock-out'}">${product.stock_quantity || 0} units</span></td>
                 <td><span class="status-badge ${product.synced ? 'status-success' : 'status-warning'}">${product.synced ? 'Synced' : 'Pending'}</span></td>
               </tr>
             `).join('')}
@@ -1401,8 +1461,15 @@ async function loadStoreOrders() {
   content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading orders...</p>';
 
   try {
-    // Fetch orders directly from the store
-    const orders = await apiCall(`/stores/${selectedStore.id}/orders`);
+    // Use dynamic endpoint with connection ID parameter
+    const response = await apiCall(`/stores/my-store/orders?connectionId=${selectedStore.id}`);
+    
+    // Handle different response formats
+    const orders = response.orders || response;
+    
+    console.log('Orders response:', response);
+    console.log('Extracted orders:', orders);
+    
     displayOrders(orders);
   } catch (error) {
     console.error('Failed to load orders:', error);
@@ -1413,8 +1480,16 @@ async function loadStoreOrders() {
 function displayOrders(orders) {
   const content = document.getElementById('orders-content');
   
+  // Display location information
+  const locationInfo = currentBusinessLocation ? 
+    `<div style="margin-bottom: 20px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+      <strong><i class="fas fa-map-marker-alt"></i> Business Location:</strong> ${currentBusinessLocation.name || 'N/A'}
+      ${currentBusinessLocation.id ? `<span style="margin-left: 10px; color: #666;">(ID: ${currentBusinessLocation.id})</span>` : ''}
+    </div>` : '';
+  
   if (orders.length === 0) {
     content.innerHTML = `
+      ${locationInfo}
       <div class="empty-state-card">
         <div class="empty-state-icon">
           <i class="fas fa-receipt"></i>
@@ -1431,12 +1506,16 @@ function displayOrders(orders) {
   const storeName = selectedStore?.storeName || selectedStore?.storeUrl || 'Store';
 
   content.innerHTML = `
+    ${locationInfo}
     <div class="content-card">
       <div class="card-header">
         <h3><i class="fas fa-shopping-cart"></i> Order History from ${storeName}</h3>
         <div class="header-stats">
           <span class="badge">${orders.length} ${orders.length === 1 ? 'Order' : 'Orders'}</span>
           <span class="revenue-badge">Total: ${currency} ${totalRevenue.toLocaleString()}</span>
+          <span class="location-badge">
+            <i class="fas fa-map-marker-alt"></i> ${currentBusinessLocation?.name || 'Unknown Location'}
+          </span>
         </div>
       </div>
       <div class="table-responsive">
@@ -1503,9 +1582,9 @@ async function loadStoreAnalytics() {
   }
   
   try {
-    // Get analytics from the store endpoint
-    const analytics = await apiCall(`/stores/${selectedStore.id}/analytics`);
-    const storeName = selectedStore.storeName || selectedStore.storeUrl;
+    // Use dynamic endpoint that finds user's WooCommerce connection automatically
+    const analytics = await apiCall('/stores/my-store/analytics');
+    const storeName = analytics.storeUrl ? new URL(analytics.storeUrl).hostname : 'WooCommerce Store';
     const currency = currentBusinessLocation?.currency || 'KES';
     
     content.innerHTML = `
@@ -1602,27 +1681,27 @@ async function syncStoreProducts() {
           <p style="margin-bottom: 20px; color: var(--gray-600);">Choose a sync action for <strong>${selectedStore.storeName || selectedStore.storeUrl}</strong>:</p>
           
           <div class="sync-options">
-            <button class="sync-option-btn" onclick="viewStoreInventory()">
-              <i class="fas fa-boxes" style="color: var(--info-color);"></i>
+            <button class="sync-option-btn" id="viewInventoryBtn" onclick="viewStoreInventory()">
+              <i class="fas fa-boxes" style="color: var(--info-color);" id="viewInventoryIcon"></i>
               <div class="sync-option-text">
-                <strong>View Store Inventory</strong>
-                <span>See current inventory levels from ${selectedStore.platform}</span>
+                <strong id="viewInventoryText">View Store Inventory</strong>
+                <span id="viewInventoryDesc">See current inventory levels from ${selectedStore.platform}</span>
               </div>
             </button>
             
-            <button class="sync-option-btn" onclick="syncInventoryFromProkip()">
-              <i class="fas fa-download" style="color: var(--success-color);"></i>
+            <button class="sync-option-btn" id="syncInventoryBtn" onclick="syncInventoryFromProkip()">
+              <i class="fas fa-download" style="color: var(--success-color);" id="syncInventoryIcon"></i>
               <div class="sync-option-text">
-                <strong>Sync Inventory from Prokip</strong>
-                <span>Push Prokip inventory quantities to ${selectedStore.platform}</span>
+                <strong id="syncInventoryText">Sync Inventory from Prokip</strong>
+                <span id="syncInventoryDesc">Push Prokip inventory quantities to ${selectedStore.platform}</span>
               </div>
             </button>
             
-            <button class="sync-option-btn" onclick="pushProductsToProkip()">
-              <i class="fas fa-upload" style="color: var(--warning-color);"></i>
+            <button class="sync-option-btn" id="pushProductsBtn" onclick="pushProductsToProkip()">
+              <i class="fas fa-upload" style="color: var(--warning-color);" id="pushProductsIcon"></i>
               <div class="sync-option-text">
-                <strong>Push Products to Store</strong>
-                <span>Create Prokip products in ${selectedStore.platform}</span>
+                <strong id="pushProductsText">Push Products to Store</strong>
+                <span id="pushProductsDesc">Create Prokip products in ${selectedStore.platform}</span>
               </div>
             </button>
           </div>
@@ -1644,13 +1723,56 @@ function closeSyncModal() {
 }
 
 async function viewStoreInventory() {
+  // Get button elements BEFORE closing modal
+  const btn = document.getElementById('viewInventoryBtn');
+  const icon = document.getElementById('viewInventoryIcon');
+  const text = document.getElementById('viewInventoryText');
+  const desc = document.getElementById('viewInventoryDesc');
+  
   closeSyncModal();
+  
+  // Show loading state only if elements exist
+  if (btn && icon && text && desc) {
+    // Disable button and show loading
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    btn.style.cursor = 'not-allowed';
+    icon.className = 'fas fa-spinner fa-spin';
+    icon.style.color = 'var(--info-color)';
+    text.textContent = 'Loading Inventory...';
+    desc.textContent = 'Please wait while we load your inventory';
+  }
   
   const content = document.getElementById('products-content');
   content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading inventory from store...</p>';
   
   try {
-    const products = await apiCall(`/stores/${selectedStore.id}/products`);
+    // Use dynamic endpoint with connection ID parameter
+    const response = await apiCall(`/stores/my-store/products?connectionId=${selectedStore.id}`);
+    
+    // Handle different response formats
+    let products = response.products || response;
+    
+    // Ensure products is an array
+    if (!Array.isArray(products)) {
+      console.error('Products is not an array:', products);
+      products = [];
+    }
+    
+    // Sort products: in-stock items first, then out-of-stock
+    products.sort((a, b) => {
+      const stockA = parseInt(a.stock_quantity) || 0;
+      const stockB = parseInt(b.stock_quantity) || 0;
+      
+      // Sort by stock (descending), so items with stock appear first
+      if (stockB !== stockA) {
+        return stockB - stockA;
+      }
+      
+      // If stock is same, sort by name alphabetically
+      return a.name.localeCompare(b.name);
+    });
+    
     displayStoreInventory(products);
   } catch (error) {
     console.error('Failed to load store inventory:', error);
@@ -1661,8 +1783,22 @@ async function viewStoreInventory() {
         </div>
         <h3>Error Loading Inventory</h3>
         <p>${error.message || 'Failed to load inventory from store'}</p>
+        <button onclick="viewStoreInventory()" class="btn-primary">
+          <i class="fas fa-retry"></i> Retry
+        </button>
       </div>
     `;
+  } finally {
+    // Restore button state only if elements exist
+    if (btn && icon && text && desc) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+      icon.className = 'fas fa-boxes';
+      icon.style.color = 'var(--info-color)';
+      text.textContent = 'View Store Inventory';
+      desc.textContent = `See current inventory levels from ${selectedStore.platform}`;
+    }
   }
 }
 
@@ -1672,6 +1808,12 @@ function displayStoreInventory(products) {
   const storeName = selectedStore?.storeName || selectedStore?.storeUrl || 'Store';
   const platform = selectedStore?.platform || 'Store';
   const platformIcon = platform === 'shopify' ? 'fab fa-shopify' : 'fab fa-wordpress';
+  
+  // Ensure products is an array
+  if (!Array.isArray(products)) {
+    console.error('Products is not an array:', products);
+    products = [];
+  }
   
   if (products.length === 0) {
     content.innerHTML = `
@@ -1688,11 +1830,11 @@ function displayStoreInventory(products) {
   
   // Calculate inventory stats
   const totalProducts = products.length;
-  const totalStock = products.reduce((sum, p) => sum + (parseInt(p.stock) || 0), 0);
-  const inStock = products.filter(p => (parseInt(p.stock) || 0) > 0).length;
-  const outOfStock = products.filter(p => (parseInt(p.stock) || 0) === 0).length;
+  const totalStock = products.reduce((sum, p) => sum + (parseInt(p.stock_quantity) || 0), 0);
+  const inStock = products.filter(p => (parseInt(p.stock_quantity) || 0) > 0).length;
+  const outOfStock = products.filter(p => (parseInt(p.stock_quantity) || 0) === 0).length;
   const lowStock = products.filter(p => {
-    const stock = parseInt(p.stock) || 0;
+    const stock = parseInt(p.stock_quantity) || 0;
     return stock > 0 && stock <= 10;
   }).length;
 
@@ -1741,7 +1883,7 @@ function displayStoreInventory(products) {
           </thead>
           <tbody>
             ${products.map(product => {
-              const stock = parseInt(product.stock) || 0;
+              const stock = parseInt(product.stock_quantity) || 0;
               let stockClass = 'stock-in';
               let stockStatus = 'In Stock';
               if (stock === 0) {
@@ -1785,7 +1927,25 @@ function displayStoreInventory(products) {
 }
 
 async function syncInventoryFromProkip() {
+  // Get button elements BEFORE closing modal
+  const btn = document.getElementById('syncInventoryBtn');
+  const icon = document.getElementById('syncInventoryIcon');
+  const text = document.getElementById('syncInventoryText');
+  const desc = document.getElementById('syncInventoryDesc');
+  
   closeSyncModal();
+  
+  // Show loading state only if elements exist
+  if (btn && icon && text && desc) {
+    // Disable button and show loading
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    btn.style.cursor = 'not-allowed';
+    icon.className = 'fas fa-spinner fa-spin';
+    icon.style.color = 'var(--info-color)';
+    text.textContent = 'Syncing Inventory...';
+    desc.textContent = 'Please wait while we sync your inventory from Prokip';
+  }
   
   try {
     showNotification('info', 'Syncing inventory from Prokip...');
@@ -1805,11 +1965,40 @@ async function syncInventoryFromProkip() {
   } catch (error) {
     console.error('Inventory sync error:', error);
     showNotification('error', 'Error syncing inventory: ' + (error.message || 'Unknown error'));
+  } finally {
+    // Restore button state only if elements exist
+    if (btn && icon && text && desc) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+      icon.className = 'fas fa-download';
+      icon.style.color = 'var(--success-color)';
+      text.textContent = 'Sync Inventory from Prokip';
+      desc.textContent = `Push Prokip inventory quantities to ${selectedStore.platform}`;
+    }
   }
 }
 
 async function pushProductsToProkip() {
+  // Get button elements BEFORE closing modal
+  const btn = document.getElementById('pushProductsBtn');
+  const icon = document.getElementById('pushProductsIcon');
+  const text = document.getElementById('pushProductsText');
+  const desc = document.getElementById('pushProductsDesc');
+  
   closeSyncModal();
+  
+  // Show loading state only if elements exist
+  if (btn && icon && text && desc) {
+    // Disable button and show loading
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    btn.style.cursor = 'not-allowed';
+    icon.className = 'fas fa-spinner fa-spin';
+    icon.style.color = 'var(--info-color)';
+    text.textContent = 'Pushing Products...';
+    desc.textContent = 'Please wait while we push products to your store';
+  }
   
   try {
     showNotification('info', 'Pushing products from Prokip to store...');
@@ -1830,6 +2019,17 @@ async function pushProductsToProkip() {
   } catch (error) {
     console.error('Product push error:', error);
     showNotification('error', 'Error pushing products: ' + (error.message || 'Unknown error'));
+  } finally {
+    // Restore button state only if elements exist
+    if (btn && icon && text && desc) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+      icon.className = 'fas fa-upload';
+      icon.style.color = 'var(--warning-color)';
+      text.textContent = 'Push Products to Store';
+      desc.textContent = `Create Prokip products in ${selectedStore.platform}`;
+    }
   }
 }
 
@@ -1898,8 +2098,14 @@ async function loadStoreSales() {
   salesList.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading sales...</p>';
 
   try {
-    // First, try to get sales from the store via orders
-    const orders = await apiCall(`/stores/${selectedStore.id}/orders`);
+    // Use dynamic endpoint with connection ID parameter
+    const response = await apiCall(`/stores/my-store/orders?connectionId=${selectedStore.id}`);
+    
+    // Handle different response formats
+    const orders = response.orders || response;
+    
+    console.log('Sales orders response:', response);
+    console.log('Extracted orders for sales:', orders);
     
     // Convert orders to sales format with source info
     const storeName = selectedStore.storeName || selectedStore.storeUrl;
@@ -2435,6 +2641,13 @@ async function loadProkipProducts() {
     // Fetch products from prokip route
     const response = await apiCall('/prokip/products', 'GET');
 
+    // Display location information
+    const locationInfo = response.locationId ? 
+      `<div style="margin-bottom: 20px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+        <strong><i class="fas fa-map-marker-alt"></i> Business Location:</strong> ${currentBusinessLocation?.name || `Location ${response.locationId}`}
+        <span style="margin-left: 10px; color: #666;">(ID: ${response.locationId})</span>
+      </div>` : '';
+
     if (response.products && response.products.length > 0) {
       let html = '<div class="products-grid">';
 
@@ -2471,9 +2684,9 @@ async function loadProkipProducts() {
       });
 
       html += '</div>';
-      productsList.innerHTML = html;
+      productsList.innerHTML = locationInfo + html;
     } else {
-      productsList.innerHTML = `
+      productsList.innerHTML = locationInfo + `
         <div class="empty-state">
           <i class="fas fa-boxes"></i>
           <p>No products found in Prokip</p>
@@ -2508,6 +2721,13 @@ async function loadProkipSales() {
 
     // Fetch sales from prokip route
     const response = await apiCall('/prokip/sales', 'GET');
+
+    // Display location information
+    const locationInfo = response.locationId ? 
+      `<div style="margin-bottom: 20px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+        <strong><i class="fas fa-map-marker-alt"></i> Business Location:</strong> ${currentBusinessLocation?.name || `Location ${response.locationId}`}
+        <span style="margin-left: 10px; color: #666;">(ID: ${response.locationId})</span>
+      </div>` : '';
 
     if (response.sales && response.sales.length > 0) {
       const currency = currentBusinessLocation?.currency || 'KES';
@@ -2552,9 +2772,9 @@ async function loadProkipSales() {
       });
 
       html += '</tbody></table></div>';
-      salesList.innerHTML = html;
+      salesList.innerHTML = locationInfo + html;
     } else {
-      salesList.innerHTML = `
+      salesList.innerHTML = locationInfo + `
         <div class="empty-state">
           <i class="fas fa-cash-register"></i>
           <p>No sales found</p>
@@ -2589,6 +2809,13 @@ async function loadProkipPurchases() {
 
     // Fetch purchases from prokip route
     const response = await apiCall('/prokip/purchases', 'GET');
+
+    // Display location information
+    const locationInfo = response.locationId ? 
+      `<div style="margin-bottom: 20px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+        <strong><i class="fas fa-map-marker-alt"></i> Business Location:</strong> ${currentBusinessLocation?.name || `Location ${response.locationId}`}
+        <span style="margin-left: 10px; color: #666;">(ID: ${response.locationId})</span>
+      </div>` : '';
 
     if (response.purchases && response.purchases.length > 0) {
       const currency = currentBusinessLocation?.currency || 'KES';
@@ -2630,9 +2857,9 @@ async function loadProkipPurchases() {
       });
 
       html += '</tbody></table></div>';
-      purchasesList.innerHTML = html;
+      purchasesList.innerHTML = locationInfo + html;
     } else {
-      purchasesList.innerHTML = `
+      purchasesList.innerHTML = locationInfo + `
         <div class="empty-state">
           <i class="fas fa-shopping-bag"></i>
           <p>No purchases found</p>
@@ -2694,3 +2921,114 @@ document.addEventListener('keydown', function(event) {
     closeModal();
   }
 });
+
+// WooCommerce Bidirectional Sync Function
+async function syncWithWooCommerce() {
+  const btn = document.getElementById('sync-woocommerce-btn');
+  const btnText = document.getElementById('sync-btn-text');
+  const spinner = document.getElementById('sync-spinner');
+  const statusDiv = document.getElementById('sync-status');
+  const statusMessage = statusDiv ? statusDiv.querySelector('.status-message') : null;
+  const statusDetails = statusDiv ? statusDiv.querySelector('.status-details') : null;
+  
+  // Check if elements exist (might be on different page)
+  if (!btn || !btnText || !spinner || !statusDiv || !statusMessage || !statusDetails) {
+    console.error('❌ Sync elements not found - make sure you are on the Prokip Operations page');
+    alert('Please navigate to the Prokip Operations page to use the sync feature.');
+    return;
+  }
+  
+  try {
+    // Show loading state
+    btn.disabled = true;
+    btnText.textContent = 'Syncing...';
+    spinner.style.display = 'inline-block';
+    
+    // Show processing status
+    statusDiv.style.display = 'block';
+    statusDiv.className = 'sync-status processing';
+    statusMessage.textContent = 'Syncing WooCommerce and Prokip...';
+    statusDetails.textContent = 'This may take a few moments. Please don\'t close this page.';
+    
+    console.log('🔄 Starting WooCommerce bidirectional sync...');
+    
+    // Call the bidirectional sync API
+    const response = await fetch(`${API_BASE_URL}/bidirectional-sync/sync-woocommerce`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    const result = await response.json();
+    
+    if (response.ok && result.success) {
+      // Success state
+      statusDiv.className = 'sync-status success';
+      statusMessage.textContent = '✅ Sync Completed Successfully!';
+      
+      const { results } = result;
+      const details = [];
+      
+      if (results.wooToProkip) {
+        details.push(`WooCommerce → Prokip: ${results.wooToProkip.success}/${results.wooToProkip.processed} orders synced`);
+        if (results.wooToProkip.stockDeducted) {
+          details.push(`${results.wooToProkip.stockDeducted} items deducted`);
+        }
+        if (results.wooToProkip.errors.length > 0) {
+          details.push(`${results.wooToProkip.errors.length} errors`);
+        }
+      }
+      
+      if (results.prokipToWoo) {
+        details.push(`Prokip → WooCommerce: ${results.prokipToWoo.success}/${results.prokipToWoo.processed} sales synced`);
+        if (results.prokipToWoo.stockUpdated) {
+          details.push(`${results.prokipToWoo.stockUpdated} items updated`);
+        }
+        if (results.prokipToWoo.errors.length > 0) {
+          details.push(`${results.prokipToWoo.errors.length} errors`);
+        }
+      }
+      
+      statusDetails.textContent = details.join(' | ');
+      
+      // Refresh dashboard data
+      setTimeout(() => {
+        loadDashboardData();
+      }, 2000);
+      
+      console.log('✅ Sync completed:', result);
+      
+    } else {
+      // Error state
+      statusDiv.className = 'sync-status error';
+      statusMessage.textContent = '❌ Sync Failed';
+      statusDetails.textContent = result.error || 'An unexpected error occurred during sync';
+      
+      console.error('❌ Sync failed:', result);
+    }
+    
+  } catch (error) {
+    // Network/error state
+    statusDiv.style.display = 'block';
+    statusDiv.className = 'sync-status error';
+    statusMessage.textContent = '❌ Connection Error';
+    statusDetails.textContent = error.message || 'Failed to connect to the server. Please check your connection.';
+    
+    console.error('❌ Sync error:', error);
+    
+  } finally {
+    // Reset button state
+    btn.disabled = false;
+    btnText.textContent = 'Sync with WooCommerce';
+    spinner.style.display = 'none';
+    
+    // Auto-hide status after 10 seconds on success
+    if (statusDiv.classList.contains('success')) {
+      setTimeout(() => {
+        statusDiv.style.display = 'none';
+      }, 10000);
+    }
+  }
+}

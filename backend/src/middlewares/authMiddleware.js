@@ -29,36 +29,71 @@ module.exports = (req, res, next) => {
     console.log('🔍 Route detection debug:');
     console.log('  - originalUrl:', originalUrl);
     
-    // Check if this is a Prokip-specific route
-    const isProkipRoute = originalUrl.startsWith('/prokip/') ||
-                         originalUrl.startsWith('/auth/prokip-');
+    // Check multiple ways to detect Prokip routes and WooCommerce store routes
+    const isProkipRoute = (originalUrl && originalUrl.startsWith('/prokip/')) ||
+                         (fullPath && fullPath.startsWith('/prokip/')) ||
+                         (req.path && req.path.startsWith('/prokip/')) ||
+                         (baseUrl && baseUrl.startsWith('/prokip')) ||
+                         (req.originalUrl && req.originalUrl.startsWith('/auth/prokip-')) ||
+                         // WooCommerce store routes - these should use JWT authentication
+                         (originalUrl && originalUrl.startsWith('/stores/')) ||
+                         (fullPath && fullPath.startsWith('/stores/')) ||
+                         (req.path && req.path.startsWith('/stores/')) ||
+                         (baseUrl && baseUrl.startsWith('/stores/')) ||
+                         // Setup and sync routes - these should use JWT authentication
+                         (originalUrl && (originalUrl.startsWith('/setup/') || originalUrl.startsWith('/sync/')));
     
-    // For ALL routes (Prokip or not), try to authenticate via Prokip token
-    console.log('🔍 Looking for Prokip config with token...');
-    
-    prisma.prokipConfig.findMany()
-      .then(allConfigs => {
-        console.log('📋 Total Prokip configs found:', allConfigs.length);
-        
-        const prokipConfig = allConfigs.find(config => config.token === token);
-        
-        if (prokipConfig) {
-          req.userId = prokipConfig.userId;
-          req.user = { id: prokipConfig.userId };
-          console.log('✅ Prokip token validated for user:', prokipConfig.userId);
-          next();
-        } else {
-          console.log('❌ No Prokip config found for token');
-          if (isProkipRoute) {
-            return res.status(401).json({ error: 'Invalid Prokip token - please log in again' });
+    if (isProkipRoute) {
+      console.log('🔍 Prokip route detected, using Prokip token validation');
+      
+      // For Prokip routes, get user from Prokip config
+      console.log('🔍 Looking for Prokip config with token...');
+      console.log('🔍 Token length:', token.length);
+      console.log('🔍 Token preview:', token.substring(0, 50) + '...');
+      
+      prisma.prokipConfig.findMany()
+        .then(allConfigs => {
+          console.log('📋 Total Prokip configs found:', allConfigs.length);
+          
+          allConfigs.forEach((config, index) => {
+            console.log(`Config ${index + 1}:`, {
+              userId: config.userId,
+              tokenLength: config.token ? config.token.length : 0,
+              tokenPreview: config.token ? config.token.substring(0, 50) + '...' : 'null',
+              locationId: config.locationId
+            });
+          });
+          
+          const prokipConfig = allConfigs.find(config => config.token === token);
+          
+          if (prokipConfig) {
+            req.userId = prokipConfig.userId;
+            req.user = { id: prokipConfig.userId };
+            console.log('✅ Prokip token validated for user:', prokipConfig.userId);
+            next();
           } else {
-            return res.status(403).json({ error: 'Invalid or expired token. Please log in again.' });
+            console.log('❌ No Prokip config found for token');
+            console.log('🔍 Trying exact match vs stored tokens...');
+            return res.status(401).json({ error: 'Invalid Prokip token - no config found' });
           }
-        }
-      })
-      .catch(error => {
-        console.error('❌ Error validating Prokip token:', error);
-        return res.status(500).json({ error: 'Token validation failed' });
-      });
+        })
+        .catch(error => {
+          console.error('❌ Error validating Prokip token:', error);
+          return res.status(500).json({ error: 'Token validation failed' });
+        });
+    } else {
+      // For WooCommerce store routes and setup/sync routes, require valid JWT
+      console.log('🔍 WooCommerce/Setup route detected, using JWT validation');
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.userId = decoded.id;
+        req.user = decoded;
+        console.log('✅ JWT token validated for user:', decoded.id);
+        return next();
+      } catch (jwtError) {
+        console.log('❌ JWT verification failed for WooCommerce/Setup route');
+        return res.status(403).json({ error: 'Invalid or expired token' });
+      }
+    }
   }
 };

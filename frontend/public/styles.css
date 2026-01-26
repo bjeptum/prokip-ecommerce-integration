@@ -2796,3 +2796,147 @@ body {
   font-weight: 600;
   font-size: 13px;
 }
+
+/* WooCommerce Sync Section */
+.sync-section {
+  margin-top: 32px;
+  background: white;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--gray-200);
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.sync-header {
+  margin-bottom: 24px;
+}
+
+.sync-header h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--gray-900);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.sync-header h2 i {
+  color: var(--primary-color);
+}
+
+.sync-header p {
+  color: var(--gray-600);
+  font-size: 14px;
+}
+
+.sync-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.btn-large {
+  padding: 16px 32px;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: var(--border-radius);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: center;
+  min-width: 280px;
+  transition: all 0.3s ease;
+}
+
+.btn-large:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.sync-info {
+  background: var(--gray-50);
+  border-radius: var(--border-radius);
+  padding: 16px;
+  border-left: 4px solid var(--primary-color);
+}
+
+.sync-direction {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.direction-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: var(--gray-700);
+}
+
+.direction-item i {
+  color: var(--primary-color);
+  font-size: 16px;
+  min-width: 20px;
+}
+
+.sync-status {
+  margin-top: 20px;
+  padding: 16px;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--gray-200);
+}
+
+.sync-status.success {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.sync-status.error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: var(--danger-color);
+  color: var(--danger-color);
+}
+
+.sync-status.processing {
+  background: rgba(37, 99, 235, 0.1);
+  border-color: var(--secondary-color);
+  color: var(--secondary-color);
+}
+
+.status-message {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.status-details {
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .sync-section {
+    margin-top: 24px;
+    padding: 20px;
+  }
+  
+  .sync-controls {
+    gap: 16px;
+  }
+  
+  .btn-large {
+    min-width: 100%;
+    padding: 14px 24px;
+  }
+  
+  .sync-direction {
+    gap: 8px;
+  }
+  
+  .direction-item {
+    font-size: 13px;
+  }
+}

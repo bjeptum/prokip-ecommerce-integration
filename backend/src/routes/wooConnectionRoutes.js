@@ -7,9 +7,50 @@ const router = express.Router();
 const prisma = new PrismaClient();
 
 /**
- * Middleware to authenticate all routes
+ * Middleware to authenticate all routes - supports both JWT and Prokip tokens
  */
-router.use(authenticateToken);
+router.use((req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  
+  // Try to verify as JWT first
+  try {
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.id;
+    req.user = decoded;
+    return next();
+  } catch (jwtError) {
+    // If JWT fails, try Prokip token
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
+    
+    prisma.prokipConfig.findMany()
+      .then(allConfigs => {
+        const prokipConfig = allConfigs.find(config => config.token === token);
+        
+        if (prokipConfig) {
+          req.userId = prokipConfig.userId;
+          req.user = { id: prokipConfig.userId };
+          return next();
+        } else {
+          return res.status(403).json({ error: 'Invalid or expired token' });
+        }
+      })
+      .catch(error => {
+        console.error('Authentication error:', error);
+        return res.status(500).json({ error: 'Authentication failed' });
+      })
+      .finally(() => {
+        prisma.$disconnect();
+      });
+  }
+});
 
 /**
  * Test WooCommerce connection without storing

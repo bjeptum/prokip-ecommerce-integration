@@ -87,15 +87,41 @@ async function registerWooWebhooks(storeUrl, consumerKey = null, consumerSecret 
       console.warn('Skipping webhook existence check (permission limited)');
     }
 
-    // Register webhook
-    await client.post('webhooks', {
-      name: 'Prokip Order Sync',
-      topic: 'order.created',
-      delivery_url: webhookUrl,
-      secret: process.env.WOO_WEBHOOK_SECRET || 'prokip_secret'
-    });
+    // Register multiple webhooks for comprehensive order tracking
+    const webhooksToRegister = [
+      {
+        name: 'Prokip Order Created',
+        topic: 'order.created',
+        delivery_url: webhookUrl
+      },
+      {
+        name: 'Prokip Order Updated', 
+        topic: 'order.updated',
+        delivery_url: webhookUrl
+      },
+      {
+        name: 'Prokip Order Status Changed',
+        topic: 'order.status_changed',
+        delivery_url: webhookUrl
+      }
+    ];
 
-    console.log(`WooCommerce webhook registered for ${storeUrl}`);
+    for (const webhook of webhooksToRegister) {
+      try {
+        await client.post('webhooks', {
+          ...webhook,
+          secret: process.env.WOO_WEBHOOK_SECRET || 'prokip_secret'
+        });
+        console.log(`✅ WooCommerce webhook registered: ${webhook.topic} for ${storeUrl}`);
+      } catch (error) {
+        // Check if webhook already exists
+        if (error.response?.data?.code === 'woocommerce_webhook_exists') {
+          console.log(`ℹ️ WooCommerce webhook already exists: ${webhook.topic} for ${storeUrl}`);
+        } else {
+          console.warn(`⚠️ Failed to register webhook ${webhook.topic}:`, error.response?.data || error.message);
+        }
+      }
+    }
   } catch (error) {
     console.error(
       `Webhook creation failed for ${storeUrl}:`,
@@ -143,7 +169,7 @@ async function getWooProducts(storeUrl, consumerKey = null, consumerSecret = nul
  * Fetch completed orders
  * Supports both OAuth and Basic Auth
  */
-async function getWooOrders(storeUrl, consumerKey = null, consumerSecret = null, accessToken = null, accessTokenSecret = null, after = null) {
+async function getWooOrders(storeUrl, consumerKey = null, consumerSecret = null, accessToken = null, accessTokenSecret = null, username = null, appPassword = null, after = null) {
   let client;
   
   try {
@@ -151,13 +177,17 @@ async function getWooOrders(storeUrl, consumerKey = null, consumerSecret = null,
       // Use OAuth client
       const wooOAuthService = require('./wooOAuthService');
       client = wooOAuthService.createAuthenticatedClient(storeUrl, accessToken, accessTokenSecret);
+    } else if (username && appPassword) {
+      // Use Application Password client
+      const wooAppPasswordService = require('./wooAppPasswordService');
+      client = wooAppPasswordService.createAuthenticatedClient(storeUrl, username, appPassword);
     } else {
-      // Use Basic Auth client
+      // Use Basic Auth client (Consumer Key/Secret)
       client = getWooClient(storeUrl, consumerKey, consumerSecret);
     }
     
     const params = {
-      status: 'completed',
+      status: ['completed', 'processing', 'pending', 'on-hold'], // Include more order statuses
       per_page: 100
     };
     if (after) params.after = after;

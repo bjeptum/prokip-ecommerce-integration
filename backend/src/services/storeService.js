@@ -5,119 +5,129 @@ const { updateShopifyInventory, getShopifyLocations, getShopifyBaseUrl } = requi
 const { getWooBaseUrl } = require('./wooService');
 const wooOAuthService = require('./wooOAuthService');
 const wooAppPasswordService = require('./wooAppPasswordService');
+const wooSecureService = require('./wooSecureService');
 
-async function createProductInStore(connection, product) {
+/**
+ * Helper function to decrypt Consumer Key/Secret if encrypted
+ */
+function decryptCredentials(connection) {
+  let consumerKey = connection.consumerKey;
+  let consumerSecret = connection.consumerSecret;
+  
+  // Check if credentials are encrypted (they will be JSON objects with "encrypted" field)
+  if (consumerKey && typeof consumerKey === 'string' && consumerKey.startsWith('{"encrypted":')) {
+    try {
+      const encryptedData = JSON.parse(consumerKey);
+      consumerKey = wooSecureService.decrypt(encryptedData);
+      console.log(' Consumer Key decrypted successfully');
+    } catch (error) {
+      console.error(' Failed to decrypt Consumer Key:', error.message);
+      throw new Error('Failed to decrypt Consumer Key');
+    }
+  }
+  
+  if (consumerSecret && typeof consumerSecret === 'string' && consumerSecret.startsWith('{"encrypted":')) {
+    try {
+      const encryptedData = JSON.parse(consumerSecret);
+      consumerSecret = wooSecureService.decrypt(encryptedData);
+      console.log(' Consumer Secret decrypted successfully');
+    } catch (error) {
+      console.error(' Failed to decrypt Consumer Secret:', error.message);
+      throw new Error('Failed to decrypt Consumer Secret');
+    }
+  }
+  
+  return { consumerKey, consumerSecret };
+}
+
+async function createOrUpdateProductInStore(connection, product) {
+  console.log(`Creating/updating product in ${connection.platform} store:`, product);
+  
   if (connection.platform === 'shopify') {
     const baseUrl = getShopifyBaseUrl(connection.storeUrl);
     
-    // Create product with inventory management enabled
-    const response = await axios.post(`${baseUrl}/admin/api/2026-01/products.json`, {
-      product: {
-        title: product.title,
-        variants: [{
-          sku: product.sku,
-          price: product.price,
-          inventory_management: 'shopify', // Enable inventory tracking!
-          inventory_policy: 'deny', // Don't allow overselling
-          requires_shipping: true
-        }]
-      }
-    }, {
-      headers: { 'X-Shopify-Access-Token': connection.accessToken }
-    });
-    
-    const createdProduct = response.data.product;
-    
-    // Set initial inventory if stock_quantity provided
-    if (product.stock_quantity !== undefined && product.stock_quantity !== null) {
-      const variant = createdProduct.variants[0];
-      const inventoryItemId = variant.inventory_item_id;
+    // First try to find existing product by SKU
+    try {
+      const searchResponse = await axios.get(`${baseUrl}/admin/api/2026-01/products.json?limit=1&fields=id,variants`, {
+        headers: { 'X-Shopify-Access-Token': connection.accessToken },
+        params: { 'variant.sku': product.sku }
+      });
       
-      if (inventoryItemId) {
-        try {
-          // Get locations
-          const locations = await getShopifyLocations(connection.storeUrl, connection.accessToken);
-          if (locations && locations.length > 0) {
-            const locationId = locations[0].id;
-            
-            // Set inventory level
-            await axios.post(`${baseUrl}/admin/api/2026-01/inventory_levels/set.json`, {
-              location_id: locationId,
-              inventory_item_id: inventoryItemId,
-              available: parseInt(product.stock_quantity) || 0
-            }, {
-              headers: { 'X-Shopify-Access-Token': connection.accessToken }
-            });
-            
-            console.log(`✅ Shopify inventory set for ${product.title}: ${product.stock_quantity} units`);
+      if (searchResponse.data.products.length > 0) {
+        // Update existing product
+        const existingProduct = searchResponse.data.products[0];
+        await axios.put(`${baseUrl}/admin/api/2026-01/products/${existingProduct.id}.json`, {
+          product: {
+            id: existingProduct.id,
+            title: product.title,
+            variants: [{ id: existingProduct.variants[0].id, sku: product.sku, price: product.price }]
           }
-        } catch (invError) {
-          console.error('⚠️ Could not set initial Shopify inventory:', invError.response?.data || invError.message);
-        }
+        }, {
+          headers: { 'X-Shopify-Access-Token': connection.accessToken }
+        });
+        console.log(`Updated Shopify product: ${product.sku}`);
+      } else {
+        // Create new product
+        await axios.post(`${baseUrl}/admin/api/2026-01/products.json`, {
+          product: {
+            title: product.title,
+            variants: [{ sku: product.sku, price: product.price }]
+          }
+        }, {
+          headers: { 'X-Shopify-Access-Token': connection.accessToken }
+        });
+        console.log(`Created Shopify product: ${product.sku}`);
       }
+    } catch (error) {
+      // If search fails, try to create
+      await axios.post(`${baseUrl}/admin/api/2026-01/products.json`, {
+        product: {
+          title: product.title,
+          variants: [{ sku: product.sku, price: product.price }]
+        }
+      }, {
+        headers: { 'X-Shopify-Access-Token': connection.accessToken }
+      });
     }
-    
-    return createdProduct;
   } else if (connection.platform === 'woocommerce') {
     const baseUrl = getWooBaseUrl(connection.storeUrl);
+    const { consumerKey, consumerSecret } = decryptCredentials(connection);
     
-    // Product data with stock management enabled
-    const productData = {
-      name: product.name || product.title,
-      sku: product.sku,
-      regular_price: product.price?.toString() || '0',
-      manage_stock: true, // Enable stock management!
-      stock_quantity: parseInt(product.stock_quantity) || 0,
-      stock_status: (parseInt(product.stock_quantity) || 0) > 0 ? 'instock' : 'outofstock'
-    };
+    console.log(`Creating/updating WooCommerce product at ${baseUrl}/wp-json/wc/v3/products`);
     
-    // Try application password first, then OAuth, then legacy credentials
-    if (connection.wooUsername && connection.wooAppPassword) {
-      // Use application password authentication
-      const client = wooAppPasswordService.createAuthenticatedClient(
-        connection.storeUrl, 
-        connection.wooUsername, 
-        connection.wooAppPassword
-      );
-      const response = await client.post('products', productData);
-      console.log(`✅ WooCommerce product created with stock: ${product.stock_quantity}`);
-      return response.data;
-    } else if (connection.accessToken && connection.accessTokenSecret) {
-      // Use OAuth authentication
-      const client = wooOAuthService.createAuthenticatedClient(
-        connection.storeUrl, 
-        connection.accessToken, 
-        connection.accessTokenSecret
-      );
-      const response = await client.post('products', productData);
-      console.log(`✅ WooCommerce product created with stock: ${product.stock_quantity}`);
-      return response.data;
-    } else {
-      // Use legacy consumer key/secret authentication
-      const consumerKey = connection.consumerKey || process.env.WOO_CONSUMER_KEY;
-      const consumerSecret = connection.consumerSecret || process.env.WOO_CONSUMER_SECRET;
-
-      if (!consumerKey || !consumerSecret) {
-        throw new Error('WooCommerce credentials are not configured.');
-      }
-
-      const oa = new OAuth(null, null, consumerKey, consumerSecret, '1.0A', null, 'HMAC-SHA1');
-      await new Promise((resolve, reject) => {
-        oa.post(
-          `${baseUrl}/wp-json/wc/v3/products`,
-          consumerKey,
-          consumerSecret,
-          JSON.stringify(productData),
-          'application/json',
-          (error, data) => {
-            if (error) reject(error);
-            else {
-              console.log(`✅ WooCommerce product created with stock: ${product.stock_quantity}`);
-              resolve(JSON.parse(data));
-            }
-          }
-        );
+    // First try to find existing product by SKU
+    try {
+      const searchResponse = await axios.get(`${baseUrl}/wp-json/wc/v3/products`, {
+        auth: { username: consumerKey, password: consumerSecret },
+        params: { sku: product.sku, limit: 1 }
       });
+      
+      if (searchResponse.data.length > 0) {
+        // Update existing product
+        const existingProduct = searchResponse.data[0];
+        const updateData = {
+          name: product.name,
+          regular_price: product.price.toString(),
+          manage_stock: true,
+          stock_quantity: product.stock_quantity || 0
+        };
+        
+        await axios.put(`${baseUrl}/wp-json/wc/v3/products/${existingProduct.id}`, updateData, {
+          auth: { username: consumerKey, password: consumerSecret },
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Prokip-Integration/1.0'
+          }
+        });
+        console.log(`Updated WooCommerce product: ${product.sku}`);
+      } else {
+        // Create new product
+        await createProductInStore(connection, product);
+        console.log(`Created WooCommerce product: ${product.sku}`);
+      }
+    } catch (error) {
+      // If search fails, try to create
+      await createProductInStore(connection, product);
     }
   }
 }
@@ -171,73 +181,47 @@ async function updateInventoryInStore(connection, sku, quantity) {
     }
   } else if (connection.platform === 'woocommerce') {
     try {
-      // Try application password first, then OAuth, then legacy credentials
-      if (connection.wooUsername && connection.wooAppPassword) {
-        // Use application password authentication
-        const client = wooAppPasswordService.createAuthenticatedClient(
-          connection.storeUrl, 
-          connection.wooUsername, 
-          connection.wooAppPassword
-        );
-        
-        // Find product by SKU
-        const productsResponse = await client.get('products', { sku });
-        const products = productsResponse.data;
-        if (products.length === 0) throw new Error('Product not found');
-        
-        const productId = products[0].id;
-        await client.put(`products/${productId}`, { stock_quantity: quantity });
-      } else if (connection.accessToken && connection.accessTokenSecret) {
-        // Use OAuth authentication
-        const client = wooOAuthService.createAuthenticatedClient(
-          connection.storeUrl, 
-          connection.accessToken, 
-          connection.accessTokenSecret
-        );
-        
-        // Find product by SKU
-        const productsResponse = await client.get('products', { sku });
-        const products = productsResponse.data;
-        if (products.length === 0) throw new Error('Product not found');
-        
-        const productId = products[0].id;
-        await client.put(`products/${productId}`, { stock_quantity: quantity });
-      } else {
-        // Use legacy consumer key/secret authentication
-        const baseUrl = getWooBaseUrl(connection.storeUrl);
-        const consumerKey = connection.consumerKey || process.env.WOO_CONSUMER_KEY;
-        const consumerSecret = connection.consumerSecret || process.env.WOO_CONSUMER_SECRET;
-
-        if (!consumerKey || !consumerSecret) {
-          throw new Error('WooCommerce credentials are not configured.');
-        }
-
-        const oa = new OAuth(null, null, consumerKey, consumerSecret, '1.0A', null, 'HMAC-SHA1');
-        await new Promise((resolve, reject) => {
-          oa.get(
-            `${baseUrl}/wp-json/wc/v3/products?sku=${sku}`,
-            consumerKey,
-            consumerSecret,
-            (error, data) => {
-              if (error) return reject(error);
-              const products = JSON.parse(data);
-              if (products.length === 0) return reject(new Error('Product not found'));
-
-              const productId = products[0].id;
-              oa.put(
-                `${baseUrl}/wp-json/wc/v3/products/${productId}`,
-                consumerKey,
-                consumerSecret,
-                JSON.stringify({ stock_quantity: quantity }),
-                'application/json',
-                (error) => error ? reject(error) : resolve()
-              );
-            }
-          );
-        });
+      // Use the same authentication method as createOrUpdateProductInStore
+      const baseUrl = getWooBaseUrl(connection.storeUrl);
+      const { consumerKey, consumerSecret } = decryptCredentials(connection);
+      
+      // Find product by SKU
+      const searchResponse = await axios.get(`${baseUrl}/wp-json/wc/v3/products`, {
+        auth: { username: consumerKey, password: consumerSecret },
+        params: { sku: sku, limit: 1 }
+      });
+      
+      if (searchResponse.data.length === 0) {
+        throw new Error(`Product with SKU ${sku} not found`);
       }
+      
+      const productId = searchResponse.data[0].id;
+      
+      // Update product stock
+      const updateResponse = await axios.put(`${baseUrl}/wp-json/wc/v3/products/${productId}`, {
+        manage_stock: true,
+        stock_quantity: quantity
+      }, {
+        auth: { username: consumerKey, password: consumerSecret },
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Prokip-Integration/1.0'
+        }
+      });
+      
+      console.log(`✅ WooCommerce inventory updated: SKU ${sku}, Product ID ${productId}, New Stock: ${quantity}`);
+      return { success: true, message: `Inventory updated for SKU ${sku}` };
+      
     } catch (error) {
-      console.error('WooCommerce inventory update failed:', error.message);
+      console.error('WooCommerce inventory update failed:', error.response?.data || error.message);
+      console.error('Full error details:', {
+        sku,
+        quantity,
+        errorMessage: error.message,
+        responseData: error.response?.data,
+        statusCode: error.response?.status
+      });
+      throw error;
     }
   }
 }
@@ -293,4 +277,93 @@ async function verifyWooCommerceConnection(connection) {
   }
 }
 
-module.exports = { createProductInStore, updateInventoryInStore, verifyWooCommerceConnection };
+async function createProductInStore(connection, product) {
+  console.log(`Creating product in ${connection.platform} store:`, product);
+  
+  if (connection.platform === 'shopify') {
+    const baseUrl = getShopifyBaseUrl(connection.storeUrl);
+    await axios.post(`${baseUrl}/admin/api/2026-01/products.json`, {
+      product: {
+        title: product.title,
+        variants: [{ sku: product.sku, price: product.price }]
+      }
+    }, {
+      headers: { 'X-Shopify-Access-Token': connection.accessToken }
+    });
+  } else if (connection.platform === 'woocommerce') {
+    const baseUrl = getWooBaseUrl(connection.storeUrl);
+    console.log(`Creating WooCommerce product at ${baseUrl}/wp-json/wc/v3/products`);
+    
+    try {
+      // Try application password first, then OAuth, then legacy credentials
+      if (connection.wooUsername && connection.wooAppPassword) {
+        console.log('Using WooCommerce application password authentication');
+        // Use application password authentication
+        const client = wooAppPasswordService.createAuthenticatedClient(
+          connection.storeUrl, 
+          connection.wooUsername, 
+          connection.wooAppPassword
+        );
+        const response = await client.post('products', {
+          name: product.name,
+          sku: product.sku,
+          regular_price: product.price.toString(),
+          status: 'publish',
+          manage_stock: true,
+          stock_quantity: product.stock_quantity || 0
+        });
+        console.log('WooCommerce product created successfully:', response.data);
+      } else if (connection.accessToken && connection.accessTokenSecret) {
+        console.log('Using WooCommerce OAuth authentication');
+        // Use OAuth authentication
+        const client = wooOAuthService.createAuthenticatedClient(
+          connection.storeUrl, 
+          connection.accessToken, 
+          connection.accessTokenSecret
+        );
+        const response = await client.post('products', {
+          name: product.name,
+          sku: product.sku,
+          regular_price: product.price.toString(),
+          status: 'publish',
+          manage_stock: true,
+          stock_quantity: product.stock_quantity || 0
+        });
+        console.log('WooCommerce product created successfully via OAuth:', response.data);
+      } else {
+        console.log('Using WooCommerce legacy consumer key/secret authentication');
+        // Use legacy consumer key/secret authentication
+        const consumerKey = connection.consumerKey || process.env.WOO_CONSUMER_KEY;
+        const consumerSecret = connection.consumerSecret || process.env.WOO_CONSUMER_SECRET;
+
+        if (!consumerKey || !consumerSecret) {
+          throw new Error('WooCommerce credentials are not configured.');
+        }
+
+        const response = await axios.post(`${baseUrl}/wp-json/wc/v3/products`, {
+          name: product.name,
+          sku: product.sku,
+          regular_price: product.price.toString(),
+          status: 'publish',
+          manage_stock: true,
+          stock_quantity: product.stock_quantity || 0
+        }, {
+          auth: {
+            username: consumerKey,
+            password: consumerSecret
+          },
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Prokip-Integration/1.0'
+          }
+        });
+        console.log('WooCommerce product created successfully via legacy auth:', response.data);
+      }
+    } catch (error) {
+      console.error('WooCommerce product creation failed:', error.response?.data || error.message);
+      throw new Error(`Failed to create WooCommerce product: ${error.response?.data?.message || error.message}`);
+    }
+  }
+}
+
+module.exports = { createProductInStore, createOrUpdateProductInStore, updateInventoryInStore, verifyWooCommerceConnection, decryptCredentials };

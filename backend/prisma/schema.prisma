@@ -94,7 +94,7 @@ model SalesLog {
   status        String?
   orderDate     DateTime
   syncedAt      DateTime @default(now())
-  prokipSellId  String? // Reference to Prokip transaction
+  prokipSellId  String?  // Store Prokip transaction ID for refunds/cancellations
 
   // Relations
   connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)

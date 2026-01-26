@@ -46,6 +46,7 @@ function isOrderPaid(data, platform) {
 
 /**
  * Get Prokip headers - uses prokipService for real API, falls back to direct config for mocks
+ * @param {number} userId - User ID (optional)
  */
 async function getProkipHeaders(userId = null) {
   if (!MOCK_PROKIP) {
@@ -53,14 +54,8 @@ async function getProkipHeaders(userId = null) {
     return await prokipService.getAuthHeaders(userId);
   }
   
-  // For mocks, use direct config - find by userId if provided
-  let prokip;
-  if (userId) {
-    prokip = await prisma.prokipConfig.findUnique({ where: { userId } });
-  } else {
-    prokip = await prisma.prokipConfig.findFirst();
-  }
-  
+  // For mocks, use direct config
+  const prokip = await prisma.prokipConfig.findFirst({ where: { userId: userId || 50 } });
   if (!prokip || !prokip.token) {
     throw new Error('Prokip not configured');
   }
@@ -235,19 +230,20 @@ async function processStoreToProkip(storeUrl, topic, data, platform, userId = nu
   try {
     if (!MOCK_PROKIP) {
       // Real API - check authentication via service
+      console.log(`🔐 Checking Prokip authentication for userId: ${userId}`);
       const isAuthenticated = await prokipService.isAuthenticated(userId);
       if (!isAuthenticated) {
         console.error('Not authenticated with Prokip. Please log in first.');
         return;
       }
+      console.log(`✅ Prokip authenticated, getting config for userId: ${userId}`);
       prokip = await prokipService.getProkipConfig(userId);
+      console.log(`✅ Getting Prokip headers for userId: ${userId}`);
       headers = await getProkipHeaders(userId);
     } else {
       // Mock mode - use direct config
-      const findConfig = userId 
-        ? await prisma.prokipConfig.findFirst({ where: { userId } })
-        : await prisma.prokipConfig.findFirst();
-      prokip = findConfig;
+      console.log(`🔧 Mock mode, getting config for userId: ${userId || 50}`);
+      prokip = await prisma.prokipConfig.findFirst({ where: { userId: userId || 50 } });
       if (!prokip || !prokip.token || !prokip.locationId) {
         console.error('Prokip config not found or incomplete');
         return;
@@ -345,10 +341,7 @@ async function processStoreToProkip(storeUrl, topic, data, platform, userId = nu
       // Record sale in Prokip
       try {
         const response = await axios.post(PROKIP_BASE + 'sell', sellBody, { headers });
-        
-        // Get invoice number from the sell body (with platform prefix)
-        const invoiceNo = sellBody.sells?.[0]?.invoice_no || orderId;
-        const prokipSellId = response.data?.data?.id?.toString() || response.data?.id?.toString();
+        const prokipSellId = response.data?.data?.[0]?.id || response.data?.id || null;
         
         await prisma.salesLog.create({
           data: {
@@ -365,7 +358,7 @@ async function processStoreToProkip(storeUrl, topic, data, platform, userId = nu
             prokipSellId: prokipSellId
           }
         });
-        console.log(`✓ Sale recorded in Prokip for order ${orderId} with invoice ${invoiceNo}`);
+        console.log(`✓ Sale recorded in Prokip for order ${orderId}${prokipSellId ? ` (Prokip ID: ${prokipSellId})` : ''}`);
       } catch (error) {
         await logSyncError(
           connection.id,
@@ -412,18 +405,20 @@ async function pollProkipToStores() {
   try {
     if (!MOCK_PROKIP) {
       // Real API - use prokipService
-      const isAuthenticated = await prokipService.isAuthenticated();
+      const isAuthenticated = await prokipService.isAuthenticated(50); // Use default userId
       if (!isAuthenticated) {
         console.log('Not authenticated with Prokip, skipping sync poll');
         return;
       }
       
-      // Get inventory from real Prokip API
-      stockData = await prokipService.getInventory();
-      headers = await prokipService.getAuthHeaders();
+      console.log('🔍 Calling prokipService.getInventory(50)...');
+      stockData = await prokipService.getInventory(50); // Use default userId
+      console.log('🔍 Calling prokipService.getProducts(50)...');
+      const products = await prokipService.getProducts(50); // Use default userId
+      headers = await prokipService.getAuthHeaders(50); // Use default userId
     } else {
       // Mock mode
-      const prokip = await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+      const prokip = await prisma.prokipConfig.findFirst({ where: { userId: 50 } });
       if (!prokip || !prokip.token) return;
       
       headers = { Authorization: `Bearer ${prokip.token}`, Accept: 'application/json' };

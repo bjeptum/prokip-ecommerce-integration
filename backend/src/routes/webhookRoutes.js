@@ -43,7 +43,29 @@ router.post('/woocommerce', express.json(), (req, res) => {
   }
 
   const data = req.body;
-  const storeUrl = source || data.resource?.site_url || data.site_url || '';
+  
+  // Extract store URL from multiple possible sources
+  let storeUrl = source || data.resource?.site_url || data.site_url || data.meta?.store_url || '';
+  
+  // If still no store URL, try to get it from the order data
+  if (!storeUrl && data.id) {
+    // For order webhooks, try to extract from the order itself
+    storeUrl = data._links?.self?.[0]?.href ? 
+      new URL(data._links.self[0].href).origin : '';
+  }
+  
+  // Log webhook details for debugging
+  console.log(`🔔 WooCommerce webhook received:`, {
+    topic,
+    storeUrl: storeUrl || 'UNKNOWN',
+    orderId: data.id || data.number,
+    source: source || 'NOT_PROVIDED'
+  });
+
+  if (!storeUrl) {
+    console.error('Unable to determine store URL from WooCommerce webhook');
+    return res.status(400).send('Store URL not found');
+  }
   
   // Process webhook asynchronously to avoid timeout
   setImmediate(() => {

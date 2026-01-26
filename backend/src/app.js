@@ -8,12 +8,13 @@ const YAML = require('yamljs');
 const authRoutes = require('./routes/authRoutes');
 const connectionRoutes = require('./routes/connectionRoutes');
 const wooConnectionRoutes = require('./routes/wooConnectionRoutes');
-const storeRoutes = require('./routes/storeRoutesSecure');
+const storeRoutes = require('./routes/storeRoutes');
 const syncRoutes = require('./routes/syncRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const prokipRoutes = require('./routes/prokipRoutes');
 const setupRoutes = require('./routes/setupRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const bidirectionalSyncRoutes = require('./routes/bidirectionalSyncRoutes');
 
 // Load OpenAPI specification
 const swaggerDocument = YAML.load(path.join(__dirname, '../../docs/openapi.yaml'));
@@ -72,6 +73,7 @@ app.use('/webhooks', webhookRoutes);
 app.use('/prokip', prokipRoutes);
 app.use('/setup', setupRoutes);
 app.use('/api', analyticsRoutes);
+app.use('/bidirectional-sync', bidirectionalSyncRoutes);
 
 // Serve static files (for frontend)
 app.use(express.static('../frontend/public'));
