@@ -1,7 +1,10 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
+const swaggerUi = require('swagger-ui-express');
+const YAML = require('yamljs');
 const authRoutes = require('./routes/authRoutes');
 const connectionRoutes = require('./routes/connectionRoutes');
 const wooConnectionRoutes = require('./routes/wooConnectionRoutes');
@@ -11,6 +14,9 @@ const webhookRoutes = require('./routes/webhookRoutes');
 const prokipRoutes = require('./routes/prokipRoutes');
 const setupRoutes = require('./routes/setupRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+
+// Load OpenAPI specification
+const swaggerDocument = YAML.load(path.join(__dirname, '../../docs/openapi.yaml'));
 
 const app = express();
 const prisma = new PrismaClient();
@@ -49,6 +55,12 @@ app.get('/health', (req, res) => {
     version: '2.0.0-secure'
   });
 });
+
+// API Documentation (Swagger UI)
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'Prokip E-commerce Integration API Docs'
+}));
 
 // Routes
 app.use('/auth', authRoutes);
