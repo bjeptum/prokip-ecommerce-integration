@@ -1,4 +1,5 @@
 const express = require('express');
+const authenticateToken = require('../middlewares/authMiddleware');
 const { pollProkipToStores } = require('../services/syncService');
 const { PrismaClient } = require('@prisma/client');
 const { getWooOrders } = require('../services/wooService');

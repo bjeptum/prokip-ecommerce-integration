@@ -3,7 +3,7 @@ const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 
-module.exports = (req, res, next) => {
+const authenticateToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -31,15 +31,11 @@ module.exports = (req, res, next) => {
     
     // Check multiple ways to detect Prokip routes and WooCommerce store routes
     const isProkipRoute = (originalUrl && originalUrl.startsWith('/prokip/')) ||
-                         (fullPath && fullPath.startsWith('/prokip/')) ||
                          (req.path && req.path.startsWith('/prokip/')) ||
-                         (baseUrl && baseUrl.startsWith('/prokip')) ||
                          (req.originalUrl && req.originalUrl.startsWith('/auth/prokip-')) ||
                          // WooCommerce store routes - these should use JWT authentication
                          (originalUrl && originalUrl.startsWith('/stores/')) ||
-                         (fullPath && fullPath.startsWith('/stores/')) ||
                          (req.path && req.path.startsWith('/stores/')) ||
-                         (baseUrl && baseUrl.startsWith('/stores/')) ||
                          // Setup and sync routes - these should use JWT authentication
                          (originalUrl && (originalUrl.startsWith('/setup/') || originalUrl.startsWith('/sync/')));
     
@@ -97,3 +93,5 @@ module.exports = (req, res, next) => {
     }
   }
 };
+
+module.exports = authenticateToken;

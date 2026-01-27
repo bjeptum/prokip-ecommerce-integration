@@ -16,8 +16,8 @@ const setupRoutes = require('./routes/setupRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const bidirectionalSyncRoutes = require('./routes/bidirectionalSyncRoutes');
 
-// Load OpenAPI specification
-const swaggerDocument = YAML.load(path.join(__dirname, '../../docs/openapi.yaml'));
+// Load OpenAPI specification (commented out for now)
+// const swaggerDocument = YAML.load(path.join(__dirname, '../../docs/openapi.yaml'));
 
 const app = express();
 const prisma = new PrismaClient();
@@ -57,11 +57,11 @@ app.get('/health', (req, res) => {
   });
 });
 
-// API Documentation (Swagger UI)
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
-  customCss: '.swagger-ui .topbar { display: none }',
-  customSiteTitle: 'Prokip E-commerce Integration API Docs'
-}));
+// API Documentation (Swagger UI) - commented out for now
+// app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
+//   customCss: '.swagger-ui .topbar { display: none }',
+//   customSiteTitle: 'Prokip E-commerce Integration API Docs'
+// }));
 
 // Routes
 app.use('/auth', authRoutes);
