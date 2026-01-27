@@ -1,0 +1,1851 @@
+openapi: 3.1.0
+info:
+  title: Prokip E-commerce Integration API
+  description: |
+    An e-commerce integration platform that connects **Shopify** and **WooCommerce** stores 
+    with the **Prokip** inventory management system.
+
+    ## Features
+    - **Multi-Platform Integration**: Connect Shopify (OAuth 2.0) and WooCommerce (REST API) stores
+    - **Real-Time Synchronization**: Bidirectional sync between Prokip and connected stores
+    - **Webhook-Driven Updates**: Instant updates via platform webhooks
+    - **Multi-Tenant**: Each user can manage their own store connections
+
+    ## Authentication
+    Most endpoints require a JWT Bearer token obtained via `/auth/prokip-login` followed by `/auth/prokip-location`.
+
+    ## Base URL
+    - Production: `https://your-app-domain.com`
+    - Development: `http://localhost:3000`
+  version: 2.0.0
+  contact:
+    name: Prokip Support
+    email: hi@prokipapp.com
+    url: https://prokip.africa/contact-us
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://your-app-domain.com
+    description: Production server
+  - url: http://localhost:3000
+    description: Local development server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from /auth/prokip-location
+
+  schemas:
+    # ===== Common Schemas =====
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error type or code
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: string
+          description: Additional error details
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+
+    # ===== User & Auth Schemas =====
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: prokip_123
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    BusinessLocation:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Main Store
+        city:
+          type: string
+          example: Nairobi
+        country:
+          type: string
+          example: Kenya
+
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        access_token:
+          type: string
+          description: Prokip API access token
+        refresh_token:
+          type: string
+          description: Token for refreshing access
+        expires_in:
+          type: integer
+          description: Token expiry in seconds
+          example: 86400
+        locations:
+          type: array
+          items:
+            $ref: '#/components/schemas/BusinessLocation'
+        message:
+          type: string
+          example: Login successful
+
+    LocationResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        userId:
+          type: integer
+        locationId:
+          type: string
+        token:
+          type: string
+          description: JWT for API authentication
+        message:
+          type: string
+
+    # ===== Connection Schemas =====
+    Connection:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        userId:
+          type: integer
+        platform:
+          type: string
+          enum: [shopify, woocommerce]
+          example: woocommerce
+        storeUrl:
+          type: string
+          example: https://mystore.com
+        storeName:
+          type: string
+          example: My Store
+        lastSync:
+          type: string
+          format: date-time
+        syncEnabled:
+          type: boolean
+          example: true
+        productCount:
+          type: integer
+          description: Number of products in store
+        orderCount:
+          type: integer
+          description: Number of orders in store
+
+    ConnectionStatus:
+      type: object
+      properties:
+        id:
+          type: integer
+        platform:
+          type: string
+        storeUrl:
+          type: string
+        storeName:
+          type: string
+        lastSync:
+          type: string
+          format: date-time
+        syncEnabled:
+          type: boolean
+        productCount:
+          type: integer
+        orderCount:
+          type: integer
+
+    # ===== Product Schemas =====
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 123
+        name:
+          type: string
+          example: Wireless Mouse
+        sku:
+          type: string
+          example: WM-001
+        price:
+          type: number
+          format: float
+          example: 29.99
+        stock:
+          type: integer
+          example: 50
+        synced:
+          type: boolean
+          example: true
+
+    ProkipProduct:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        sku:
+          type: string
+        product_variations:
+          type: array
+          items:
+            type: object
+            properties:
+              variations:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    sell_price_inc_tax:
+                      type: number
+
+    CreateProductRequest:
+      type: object
+      required:
+        - name
+        - sku
+        - sellPrice
+      properties:
+        name:
+          type: string
+          example: New Product
+        sku:
+          type: string
+          example: NP-001
+        sellPrice:
+          type: number
+          example: 49.99
+        purchasePrice:
+          type: number
+          example: 25.00
+        quantity:
+          type: integer
+          example: 100
+
+    # ===== Order Schemas =====
+    Order:
+      type: object
+      properties:
+        id:
+          type: integer
+        number:
+          type: string
+          example: "#1001"
+        customer:
+          type: string
+          example: John Doe
+        email:
+          type: string
+          example: john@example.com
+        total:
+          type: string
+          example: "99.99"
+        status:
+          type: string
+          example: completed
+        date:
+          type: string
+          format: date-time
+        synced:
+          type: boolean
+
+    # ===== Sales Schemas =====
+    SaleItem:
+      type: object
+      required:
+        - sku
+        - quantity
+        - unitPrice
+      properties:
+        sku:
+          type: string
+        quantity:
+          type: integer
+        unitPrice:
+          type: number
+
+    RecordSaleRequest:
+      type: object
+      required:
+        - products
+      properties:
+        products:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaleItem'
+        customerName:
+          type: string
+        paymentMethod:
+          type: string
+          enum: [cash, card, mobile]
+
+    Sale:
+      type: object
+      properties:
+        id:
+          type: integer
+        invoice_no:
+          type: string
+        final_total:
+          type: number
+        transaction_date:
+          type: string
+          format: date-time
+        status:
+          type: string
+        payment_status:
+          type: string
+
+    # ===== Purchase Schemas =====
+    PurchaseItem:
+      type: object
+      required:
+        - sku
+        - quantity
+        - unitCost
+      properties:
+        sku:
+          type: string
+        quantity:
+          type: integer
+        unitCost:
+          type: number
+
+    RecordPurchaseRequest:
+      type: object
+      required:
+        - products
+      properties:
+        products:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseItem'
+        supplierName:
+          type: string
+        referenceNo:
+          type: string
+
+    # ===== Sync Schemas =====
+    SyncStatus:
+      type: object
+      properties:
+        stores:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectionStatus'
+        prokip:
+          type: object
+          properties:
+            products:
+              type: integer
+            sales:
+              type: integer
+            purchases:
+              type: integer
+
+    SyncError:
+      type: object
+      properties:
+        id:
+          type: integer
+        connectionId:
+          type: integer
+        errorType:
+          type: string
+        errorMessage:
+          type: string
+        resolved:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    InventorySyncResult:
+      type: object
+      properties:
+        sku:
+          type: string
+        status:
+          type: string
+          enum: [success, partial, error]
+        quantity:
+          type: integer
+        price:
+          type: number
+        storeUpdated:
+          type: boolean
+
+    # ===== Analytics Schemas =====
+    DashboardAnalytics:
+      type: object
+      properties:
+        totalSales:
+          type: number
+        totalOrders:
+          type: integer
+        topProducts:
+          type: array
+          items:
+            type: object
+        recentOrders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+
+    SalesAnalytics:
+      type: object
+      properties:
+        totalRevenue:
+          type: number
+        orderCount:
+          type: integer
+        averageOrderValue:
+          type: number
+        salesByPlatform:
+          type: object
+
+    # ===== WooCommerce Connection Schemas =====
+    WooConnectRequest:
+      type: object
+      required:
+        - storeUrl
+        - consumerKey
+        - consumerSecret
+      properties:
+        storeUrl:
+          type: string
+          example: https://mystore.com
+        consumerKey:
+          type: string
+          example: ck_xxxxxxxxxxxxxxxxxxxxxxxx
+        consumerSecret:
+          type: string
+          example: cs_xxxxxxxxxxxxxxxxxxxxxxxx
+        storeName:
+          type: string
+          example: My WooCommerce Store
+
+    WooConnectResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        storeInfo:
+          type: object
+          properties:
+            name:
+              type: string
+            url:
+              type: string
+            version:
+              type: string
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Authentication
+    description: Prokip login and session management
+  - name: Connections
+    description: Manage Shopify and WooCommerce store connections
+  - name: WooCommerce
+    description: WooCommerce-specific connection endpoints
+  - name: Prokip
+    description: Direct access to Prokip inventory data
+  - name: Stores
+    description: Data from connected e-commerce stores
+  - name: Sync
+    description: Inventory and data synchronization
+  - name: Analytics
+    description: Sales and performance analytics
+  - name: Setup
+    description: Initial setup and product mapping
+  - name: Webhooks
+    description: Webhook endpoints for store events
+
+paths:
+  # ===== Health Check =====
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check endpoint
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+                  version:
+                    type: string
+                    example: 2.0.0-secure
+
+  # ===== Authentication Endpoints =====
+  /auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register a new user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  minLength: 1
+                password:
+                  type: string
+                  minLength: 6
+      responses:
+        '200':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Validation error
+        '500':
+          description: Username already exists
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login with local credentials
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: JWT token for authentication
+        '401':
+          description: Invalid credentials
+
+  /auth/prokip-login:
+    post:
+      tags: [Authentication]
+      summary: Login with Prokip credentials
+      description: |
+        Authenticate using Prokip email and password.
+        Returns an access token and list of business locations.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  format: email
+                  example: user@prokip.com
+                password:
+                  type: string
+                  format: password
+                locationId:
+                  type: string
+                  description: Optional - immediately save location
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Invalid credentials or login failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/prokip-location:
+    post:
+      tags: [Authentication]
+      summary: Set Prokip business location
+      description: |
+        After login, select a business location to work with.
+        Returns a JWT token for subsequent API calls.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [locationId, access_token]
+              properties:
+                locationId:
+                  type: string
+                  example: "123"
+                access_token:
+                  type: string
+                refresh_token:
+                  type: string
+                expires_in:
+                  type: integer
+                username:
+                  type: string
+      responses:
+        '200':
+          description: Location saved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationResponse'
+        '400':
+          description: Validation error
+        '500':
+          description: Server error
+
+  /auth/prokip-locations:
+    get:
+      tags: [Authentication]
+      summary: Get business locations
+      description: Get available business locations for authenticated Prokip user
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Bearer {prokip_access_token}
+      responses:
+        '200':
+          description: List of locations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  locations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BusinessLocation'
+        '401':
+          description: Not authenticated
+
+  /auth/prokip-status:
+    get:
+      tags: [Authentication]
+      summary: Check Prokip authentication status
+      security: []
+      responses:
+        '200':
+          description: Authentication status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated:
+                    type: boolean
+                  hasLocation:
+                    type: boolean
+                  locationId:
+                    type: string
+                  userId:
+                    type: integer
+
+  /auth/prokip-logout:
+    post:
+      tags: [Authentication]
+      summary: Logout from Prokip
+      security: []
+      responses:
+        '200':
+          description: Logged out successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ===== Connection Endpoints =====
+  /connections/shopify:
+    get:
+      tags: [Connections]
+      summary: Initiate Shopify OAuth (legacy)
+      description: Redirects to Shopify OAuth authorization page
+      parameters:
+        - name: store
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Shopify store domain (e.g., mystore.myshopify.com)
+      responses:
+        '302':
+          description: Redirect to Shopify OAuth
+        '400':
+          description: Prokip authentication required
+
+  /connections/shopify/initiate:
+    post:
+      tags: [Connections]
+      summary: Initiate Shopify OAuth connection
+      description: Returns the Shopify OAuth authorization URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [storeUrl]
+              properties:
+                storeUrl:
+                  type: string
+                  example: mystore.myshopify.com
+      responses:
+        '200':
+          description: Authorization URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authUrl:
+                    type: string
+                    description: Shopify OAuth URL
+        '500':
+          description: Failed to initiate connection
+
+  /connections/callback/shopify:
+    get:
+      tags: [Connections]
+      summary: Shopify OAuth callback
+      description: Handles OAuth callback from Shopify
+      security: []
+      parameters:
+        - name: code
+          in: query
+          schema:
+            type: string
+        - name: shop
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to dashboard
+
+  /connections/woocommerce/connect:
+    post:
+      tags: [Connections]
+      summary: Connect WooCommerce via Application Password
+      description: Connect using WordPress username and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [storeUrl, username, password]
+              properties:
+                storeUrl:
+                  type: string
+                  format: uri
+                  example: https://mystore.com
+                username:
+                  type: string
+                  description: WordPress admin username
+                password:
+                  type: string
+                  description: WordPress admin password
+      responses:
+        '200':
+          description: Connected successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  storeUrl:
+                    type: string
+                  appName:
+                    type: string
+        '401':
+          description: Authentication failed
+        '400':
+          description: Prokip authentication required
+
+  /connections/woocommerce:
+    post:
+      tags: [Connections]
+      summary: Connect WooCommerce (legacy)
+      description: Connect using environment-configured credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [storeUrl]
+              properties:
+                storeUrl:
+                  type: string
+                  format: uri
+      responses:
+        '200':
+          description: Connected successfully
+        '500':
+          description: Credentials not configured
+
+  /connections/callback/woocommerce:
+    get:
+      tags: [Connections]
+      summary: WooCommerce OAuth callback
+      security: []
+      parameters:
+        - name: oauth_token
+          in: query
+          schema:
+            type: string
+        - name: oauth_verifier
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to dashboard
+
+  /connections/prokip:
+    post:
+      tags: [Connections]
+      summary: Set Prokip configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, locationId]
+              properties:
+                token:
+                  type: string
+                locationId:
+                  type: string
+      responses:
+        '200':
+          description: Configuration saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /connections/status:
+    get:
+      tags: [Connections]
+      summary: Get all connections status
+      description: Returns enhanced connection data with real-time store info
+      responses:
+        '200':
+          description: List of connections with status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConnectionStatus'
+
+  /connections/disconnect:
+    post:
+      tags: [Connections]
+      summary: Disconnect a store
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connectionId]
+              properties:
+                connectionId:
+                  type: integer
+      responses:
+        '200':
+          description: Disconnected successfully
+        '403':
+          description: Unauthorized
+        '404':
+          description: Connection not found
+
+  /connections/{id}:
+    delete:
+      tags: [Connections]
+      summary: Delete a connection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Connection deleted
+        '500':
+          description: Failed to disconnect
+
+  # ===== WooCommerce Secure Connection Endpoints =====
+  /woo-connections/test:
+    post:
+      tags: [WooCommerce]
+      summary: Test WooCommerce connection
+      description: Test connection without storing credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WooConnectRequest'
+      responses:
+        '200':
+          description: Connection test successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  storeInfo:
+                    type: object
+                  testResults:
+                    type: object
+        '400':
+          description: Connection test failed
+
+  /woo-connections/connect:
+    post:
+      tags: [WooCommerce]
+      summary: Connect WooCommerce store (secure)
+      description: Connect using Consumer Key and Secret with encryption
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WooConnectRequest'
+      responses:
+        '200':
+          description: Store connected successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WooConnectResponse'
+        '400':
+          description: Invalid credentials or missing fields
+
+  # ===== Prokip Endpoints =====
+  /prokip/products:
+    get:
+      tags: [Prokip]
+      summary: Get products from Prokip
+      responses:
+        '200':
+          description: List of Prokip products
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  products:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProkipProduct'
+        '401':
+          description: Not authenticated
+        '500':
+          description: Failed to fetch products
+
+    post:
+      tags: [Prokip]
+      summary: Create product in Prokip
+      description: Creates a product in Prokip and syncs to all connected stores
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProductRequest'
+      responses:
+        '201':
+          description: Product created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  product:
+                    $ref: '#/components/schemas/ProkipProduct'
+                  syncResults:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        store:
+                          type: string
+                        platform:
+                          type: string
+                        status:
+                          type: string
+                  message:
+                    type: string
+        '400':
+          description: Validation error
+
+  /prokip/inventory:
+    get:
+      tags: [Prokip]
+      summary: Get inventory from Prokip
+      responses:
+        '200':
+          description: Inventory data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  inventory:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        sku:
+                          type: string
+                        stock:
+                          type: integer
+                        location_id:
+                          type: integer
+        '500':
+          description: Failed to fetch inventory
+
+  /prokip/sales:
+    get:
+      tags: [Prokip]
+      summary: Get sales from Prokip
+      parameters:
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: locationId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of sales
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sales:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Sale'
+        '401':
+          description: Not authenticated
+
+    post:
+      tags: [Prokip]
+      summary: Record a sale in Prokip
+      description: Records a sale and updates inventory in connected stores
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordSaleRequest'
+      responses:
+        '201':
+          description: Sale recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sale:
+                    $ref: '#/components/schemas/Sale'
+                  syncResults:
+                    type: array
+                    items:
+                      type: object
+                  message:
+                    type: string
+        '400':
+          description: Validation error or product not found
+
+  /prokip/purchases:
+    get:
+      tags: [Prokip]
+      summary: Get purchases from Prokip
+      parameters:
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: locationId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of purchases
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  purchases:
+                    type: array
+                    items:
+                      type: object
+        '401':
+          description: Not authenticated
+
+    post:
+      tags: [Prokip]
+      summary: Record a purchase in Prokip
+      description: Records a purchase and increases inventory in connected stores
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordPurchaseRequest'
+      responses:
+        '201':
+          description: Purchase recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  purchase:
+                    type: object
+                  syncResults:
+                    type: array
+                    items:
+                      type: object
+                  message:
+                    type: string
+        '400':
+          description: Validation error
+
+  # ===== Store Endpoints =====
+  /stores/{id}/products:
+    get:
+      tags: [Stores]
+      summary: Get products from a connected store
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Connection ID
+      responses:
+        '200':
+          description: List of store products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Product'
+        '401':
+          description: Store authentication failed
+        '404':
+          description: Store not found
+
+  /stores/{id}/orders:
+    get:
+      tags: [Stores]
+      summary: Get orders from a connected store
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Connection ID
+      responses:
+        '200':
+          description: List of orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+        '401':
+          description: Store authentication failed
+        '404':
+          description: Store not found
+
+  /stores/{id}/sales:
+    get:
+      tags: [Stores]
+      summary: Get sales from a connected store
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Connection ID
+      responses:
+        '200':
+          description: List of sales
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+        '401':
+          description: Store authentication failed
+        '404':
+          description: Store not found
+
+  /stores/{id}/details:
+    get:
+      tags: [Stores]
+      summary: Get store connection details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Connection ID
+      responses:
+        '200':
+          description: Store details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Connection'
+        '404':
+          description: Store not found
+
+  # ===== Sync Endpoints =====
+  /sync:
+    post:
+      tags: [Sync]
+      summary: Trigger manual sync
+      description: Polls Prokip and syncs to all connected stores
+      responses:
+        '200':
+          description: Sync triggered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /sync/status:
+    get:
+      tags: [Sync]
+      summary: Get sync status
+      description: Returns sync status for all connections
+      security: []
+      responses:
+        '200':
+          description: Sync status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncStatus'
+
+  /sync/pause:
+    post:
+      tags: [Sync]
+      summary: Pause sync
+      description: Pause sync for a specific connection or all connections
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                connectionId:
+                  type: integer
+                  description: Optional - pause specific connection
+      responses:
+        '200':
+          description: Sync paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /sync/resume:
+    post:
+      tags: [Sync]
+      summary: Resume sync
+      description: Resume sync for a specific connection or all connections
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                connectionId:
+                  type: integer
+      responses:
+        '200':
+          description: Sync resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /sync/pull-orders:
+    post:
+      tags: [Sync]
+      summary: Pull orders from WooCommerce stores
+      description: Fetches orders from connected WooCommerce stores
+      responses:
+        '200':
+          description: Orders pulled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /sync/pull-sales:
+    post:
+      tags: [Sync]
+      summary: Pull sales from a store
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connectionId]
+              properties:
+                connectionId:
+                  type: integer
+      responses:
+        '200':
+          description: Sales synced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  syncedAt:
+                    type: string
+                    format: date-time
+        '400':
+          description: Connection ID required
+        '404':
+          description: Store not found
+
+  /sync/inventory:
+    post:
+      tags: [Sync]
+      summary: Sync inventory from Prokip to store
+      description: Syncs inventory and prices from Prokip to a connected store
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connectionId]
+              properties:
+                connectionId:
+                  type: integer
+      responses:
+        '200':
+          description: Inventory synced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/InventorySyncResult'
+        '400':
+          description: Connection ID required
+        '404':
+          description: Connection not found
+
+  /sync/errors:
+    get:
+      tags: [Sync]
+      summary: Get sync errors
+      parameters:
+        - name: connectionId
+          in: query
+          schema:
+            type: integer
+        - name: resolved
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of sync errors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SyncError'
+
+  /sync/errors/{id}/resolve:
+    patch:
+      tags: [Sync]
+      summary: Mark sync error as resolved
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Error resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ===== Analytics Endpoints =====
+  /api/record:
+    post:
+      tags: [Analytics]
+      summary: Record a sale with platform prefix
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sku:
+                  type: string
+                quantity:
+                  type: integer
+                amount:
+                  type: number
+                platform:
+                  type: string
+      responses:
+        '200':
+          description: Sale recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                  message:
+                    type: string
+
+  /api/analytics:
+    get:
+      tags: [Analytics]
+      summary: Get sales analytics
+      parameters:
+        - name: locationId
+          in: query
+          schema:
+            type: string
+        - name: dateRange
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d, 365d]
+            default: 30d
+      responses:
+        '200':
+          description: Sales analytics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/SalesAnalytics'
+
+  /api/dashboard:
+    get:
+      tags: [Analytics]
+      summary: Get dashboard analytics
+      parameters:
+        - name: dateRange
+          in: query
+          schema:
+            type: string
+            default: 30d
+      responses:
+        '200':
+          description: Dashboard analytics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/DashboardAnalytics'
+
+  /api/products:
+    get:
+      tags: [Analytics]
+      summary: Get product performance analytics
+      responses:
+        '200':
+          description: Product performance data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        sku:
+                          type: string
+                        name:
+                          type: string
+                        totalSales:
+                          type: integer
+                        revenue:
+                          type: number
+
+  /api/sync-inventory:
+    post:
+      tags: [Analytics]
+      summary: Sync inventory to connected stores
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                locationId:
+                  type: string
+      responses:
+        '200':
+          description: Inventory sync completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                  message:
+                    type: string
+
+  /api/sync-status:
+    get:
+      tags: [Analytics]
+      summary: Get sync status for connected stores
+      responses:
+        '200':
+          description: Sync status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      stores:
+                        type: array
+                        items:
+                          type: object
+                      totalStores:
+                        type: integer
+                      activeSyncs:
+                        type: integer
+                      successfulSyncs:
+                        type: integer
+
+  /api/sync-store/{storeId}:
+    post:
+      tags: [Analytics]
+      summary: Trigger manual sync for a specific store
+      parameters:
+        - name: storeId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Sync triggered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ===== Setup Endpoints =====
+  /setup/products:
+    get:
+      tags: [Setup]
+      summary: Get all products (Prokip + stores)
+      description: Returns products from Prokip and all connected stores
+      responses:
+        '200':
+          description: Combined product list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prokipProducts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        source:
+                          type: string
+                          example: prokip
+                        id:
+                          type: integer
+                        name:
+                          type: string
+                        sku:
+                          type: string
+                        price:
+                          type: number
+                  storeProducts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        source:
+                          type: string
+                          example: store
+                        connectionId:
+                          type: integer
+                        platform:
+                          type: string
+                        id:
+                          type: integer
+                        name:
+                          type: string
+                        sku:
+                          type: string
+                        price:
+                          type: string
+                  data:
+                    type: array
+                    description: Alias for prokipProducts
+        '401':
+          description: Please log in to Prokip first
+
+  /setup/products/matches:
+    get:
+      tags: [Setup]
+      summary: Get product matches
+      description: Get suggested product matches between Prokip and store
+      parameters:
+        - name: connectionId
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Product matches
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        prokipProduct:
+                          type: object
+                        storeProduct:
+                          type: object
+                        matchType:
+                          type: string
+                          enum: [exact, partial, none]
+        '400':
+          description: Invalid connection
+
+  # ===== Webhook Endpoints =====
+  /webhooks/shopify:
+    post:
+      tags: [Webhooks]
+      summary: Shopify webhook endpoint
+      description: Receives webhook events from Shopify
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Webhook processed
+        '401':
+          description: Invalid HMAC
+
+  /webhooks/woocommerce:
+    post:
+      tags: [Webhooks]
+      summary: WooCommerce webhook endpoint
+      description: Receives webhook events from WooCommerce
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Webhook processed
+        '401':
+          description: Invalid signature
