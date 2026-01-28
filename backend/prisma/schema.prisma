@@ -84,6 +84,7 @@ model InventoryLog {
 model SalesLog {
   id            Int      @id @default(autoincrement())
   connectionId  Int
+  locationId    String? // Add locationId field
   orderId       String
   orderNumber   String?
   invoiceNo     String? // Invoice number with platform prefix (WOO-123, SHOPIFY-456)
@@ -94,7 +95,7 @@ model SalesLog {
   status        String?
   orderDate     DateTime
   syncedAt      DateTime @default(now())
-  prokipSellId  String?  // Store Prokip transaction ID for refunds/cancellations
+  prokipSellId  String? // Store Prokip transaction ID for refunds/cancellations
 
   // Relations
   connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
@@ -134,18 +135,28 @@ model ProkipConfig {
 }
 
 model SyncError {
-  id           Int       @id @default(autoincrement())
-  connectionId Int
-  errorType    String // 'inventory', 'product', 'order', etc.
-  errorMessage String
-  errorDetails String? // JSON with additional details
-  resolved     Boolean   @default(false)
-  resolvedAt   DateTime?
-  createdAt    DateTime  @default(now())
+  id               Int       @id @default(autoincrement())
+  connectionId     Int
+  orderId          String? // Optional order ID for order-related errors
+  errorType        String // 'inventory', 'product', 'order', 'network', 'auth', etc.
+  errorMessage     String
+  errorDetails     String? // JSON with additional details, recovery context, etc.
+  severity         String    @default("medium") // 'low', 'medium', 'high', 'critical'
+  resolved         Boolean   @default(false)
+  resolvedAt       DateTime?
+  autoRecovered    Boolean   @default(false) // Track if auto-recovery was successful
+  recoveryAttempts Int       @default(0) // Number of recovery attempts
+  lastRecoveryAt   DateTime? // Last time recovery was attempted
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   // Relations
   connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
+  @@index([connectionId, resolved])
+  @@index([errorType, resolved])
+  @@index([severity, resolved])
+  @@index([createdAt])
   @@map("sync_errors")
 }
 

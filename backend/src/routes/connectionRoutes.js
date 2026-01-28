@@ -3,7 +3,7 @@ const bodyParser = require('body-parser');
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { body, query, validationResult } = require('express-validator');
 const authMiddleware = require('../middlewares/authMiddleware');
 
@@ -14,7 +14,6 @@ const wooAppPasswordService = require('../services/wooAppPasswordService');
 const { processStoreToProkip } = require('../services/syncService');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Track used OAuth codes to prevent duplicate processing
 const usedOAuthCodes = new Set();

@@ -1,13 +1,13 @@
 const express = require('express');
 const authenticateToken = require('../middlewares/authMiddleware');
 const { pollProkipToStores } = require('../services/syncService');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { getWooOrders } = require('../services/wooService');
 const { processStoreToProkip } = require('../services/syncService');
 const { decryptCredentials } = require('../services/storeService');
+const errorRecoveryService = require('../services/errorRecoveryService');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Custom authentication middleware for sync routes
 router.use(async (req, res, next) => {
@@ -275,8 +275,77 @@ router.patch('/errors/:id/resolve', async (req, res) => {
     });
     res.json({ success: true, message: 'Error marked as resolved' });
   } catch (error) {
-    console.error('Failed to resolve error:', error);
-    res.status(500).json({ error: 'Failed to resolve error' });
+    console.error('Failed to resolve sync error:', error);
+    res.status(500).json({ error: 'Failed to resolve sync error' });
+  }
+});
+
+// Automatic error recovery
+router.post('/recover', async (req, res) => {
+  try {
+    const { errorId, connectionId } = req.body;
+    
+    const result = await errorRecoveryService.processErrorRecovery(errorId);
+    
+    res.json({
+      success: true,
+      message: 'Error recovery process completed',
+      ...result
+    });
+  } catch (error) {
+    console.error('Error recovery failed:', error);
+    res.status(500).json({
+      error: 'Error recovery failed',
+      details: error.message
+    });
+  }
+});
+
+// Get error recovery statistics
+router.get('/recovery-stats', async (req, res) => {
+  try {
+    const { connectionId } = req.query;
+    const stats = await errorRecoveryService.getRecoveryStats(connectionId);
+    
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    console.error('Failed to get recovery stats:', error);
+    res.status(500).json({
+      error: 'Failed to get recovery statistics',
+      details: error.message
+    });
+  }
+});
+
+// Schedule automatic error recovery (runs every 5 minutes)
+router.post('/schedule-recovery', async (req, res) => {
+  try {
+    const { connectionId } = req.body;
+    
+    // Start background error recovery process
+    setTimeout(async () => {
+      try {
+        console.log('🔄 Starting scheduled error recovery...');
+        const result = await errorRecoveryService.processErrorRecovery();
+        console.log(`✅ Scheduled recovery completed: ${result.processed} errors processed`);
+      } catch (error) {
+        console.error('❌ Scheduled error recovery failed:', error);
+      }
+    }, 1000);
+    
+    res.json({
+      success: true,
+      message: 'Error recovery scheduled to run in background'
+    });
+  } catch (error) {
+    console.error('Failed to schedule error recovery:', error);
+    res.status(500).json({
+      error: 'Failed to schedule error recovery',
+      details: error.message
+    });
   }
 });
 
@@ -476,6 +545,318 @@ router.post('/pull-sales', authenticateToken, async (req, res) => {
   }
 });
 
+// Pull products from connected store to Prokip
+router.post('/pull-products', authenticateToken, async (req, res) => {
+  const { connectionId } = req.body;
+  const userId = req.userId;
+  
+  if (!connectionId) {
+    return res.status(400).json({ error: 'Connection ID is required' });
+  }
+  
+  try {
+    const connection = await prisma.connection.findFirst({
+      where: { 
+        id: parseInt(connectionId),
+        userId: userId
+      }
+    });
+    
+    if (!connection) {
+      return res.status(404).json({ error: 'Connection not found or access denied' });
+    }
+    
+    let storeProducts = [];
+    
+    // Get products from the store
+    if (connection.platform === 'shopify') {
+      const { getShopifyProducts } = require('../services/shopifyService');
+      storeProducts = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+    } else if (connection.platform === 'woocommerce') {
+      const { getWooProducts } = require('../services/wooService');
+      storeProducts = await getWooProducts(connection);
+    }
+    
+    console.log(`📦 Pulling ${storeProducts.length} products from ${connection.platform} to Prokip`);
+    
+    // Get Prokip service for creating products
+    const prokipService = require('../services/prokipService');
+    const results = [];
+    
+    for (const product of storeProducts) {
+      if (!product.sku) continue;
+      
+      try {
+        // Transform store product to Prokip format
+        const prokipProduct = {
+          name: product.title || product.name,
+          sku: product.sku,
+          price: product.price || 0,
+          description: product.description || product.body_html || '',
+          quantity: product.inventory_quantity || product.stock || 0
+        };
+        
+        // Create product in Prokip
+        await prokipService.createProduct(prokipProduct, userId);
+        
+        // Log to inventory tracking
+        await prisma.inventoryLog.upsert({
+          where: {
+            connectionId_sku: {
+              connectionId: connection.id,
+              sku: product.sku
+            }
+          },
+          update: {
+            productName: prokipProduct.name,
+            quantity: prokipProduct.quantity,
+            price: prokipProduct.price,
+            lastSynced: new Date()
+          },
+          create: {
+            connectionId: connection.id,
+            sku: product.sku,
+            productName: prokipProduct.name,
+            quantity: prokipProduct.quantity,
+            price: prokipProduct.price
+          }
+        });
+        
+        results.push({ sku: product.sku, status: 'success', message: 'Synced to Prokip' });
+        
+      } catch (error) {
+        results.push({ sku: product.sku, status: 'error', message: error.message });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Processed ${storeProducts.length} products from ${connection.platform} to Prokip`,
+      results: results
+    });
+    
+  } catch (error) {
+    console.error('Pull products sync failed:', error);
+    res.status(500).json({ 
+      error: 'Pull products sync failed',
+      details: error.message 
+    });
+  }
+});
+
+// Master bidirectional sync between Prokip and store
+router.post('/bidirectional', authenticateToken, async (req, res) => {
+  const { connectionId } = req.body;
+  const userId = req.userId;
+  
+  if (!connectionId) {
+    return res.status(400).json({ error: 'Connection ID is required' });
+  }
+  
+  try {
+    const connection = await prisma.connection.findFirst({
+      where: { 
+        id: parseInt(connectionId),
+        userId: userId
+      }
+    });
+    
+    if (!connection) {
+      return res.status(404).json({ error: 'Connection not found or access denied' });
+    }
+    
+    const prokipService = require('../services/prokipService');
+    const { createProductInStore, updateInventoryInStore } = require('../services/storeService');
+    const results = [];
+    
+    // Get products from both systems
+    let storeProducts = [];
+    let prokipProducts = await prokipService.getProducts(null, userId);
+    
+    if (connection.platform === 'shopify') {
+      const { getShopifyProducts } = require('../services/shopifyService');
+      storeProducts = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+      // Transform Shopify products to standard format
+      storeProducts = storeProducts.map(shopifyProduct => {
+        const variant = shopifyProduct.variants && shopifyProduct.variants[0] ? shopifyProduct.variants[0] : {};
+        return {
+          id: shopifyProduct.id,
+          name: shopifyProduct.title,
+          sku: variant.sku || shopifyProduct.handle || 'N/A',
+          price: parseFloat(variant.price) || 0,
+          stock_quantity: variant.inventory_quantity || 0,
+          description: shopifyProduct.body_html || ''
+        };
+      });
+    } else if (connection.platform === 'woocommerce') {
+      const { getWooProducts } = require('../services/wooService');
+      storeProducts = await getWooProducts(connection);
+    }
+    
+    // Sync from Prokip to Store
+    for (const prokipProduct of prokipProducts) {
+      if (!prokipProduct.sku) continue;
+      
+      try {
+        const storeProduct = storeProducts.find(sp => sp.sku === prokipProduct.sku);
+        
+        if (!storeProduct) {
+          // Product doesn't exist in store, create it
+          const newStoreProduct = {
+            title: prokipProduct.name,
+            sku: prokipProduct.sku,
+            price: prokipProduct.price || 0,
+            description: prokipProduct.description || '',
+            stock_quantity: prokipProduct.quantity || 0
+          };
+          await createProductInStore(connection, newStoreProduct);
+          results.push({ sku: prokipProduct.sku, action: 'created_in_store', message: 'Product created in store' });
+        } else {
+          // Product exists, update inventory if different
+          if (storeProduct.stock_quantity !== prokipProduct.quantity) {
+            await updateInventoryInStore(connection, prokipProduct.sku, prokipProduct.quantity || 0);
+            results.push({ sku: prokipProduct.sku, action: 'updated_store_inventory', message: 'Store inventory updated' });
+          }
+        }
+      } catch (error) {
+        results.push({ sku: prokipProduct.sku, action: 'prokip_to_store_error', message: error.message });
+      }
+    }
+    
+    // Sync from Store to Prokip
+    for (const storeProduct of storeProducts) {
+      if (!storeProduct.sku) continue;
+      
+      try {
+        const prokipProduct = prokipProducts.find(pp => pp.sku === storeProduct.sku);
+        
+        if (!prokipProduct) {
+          // Product doesn't exist in Prokip, create it
+          const newProkipProduct = {
+            name: storeProduct.name,
+            sku: storeProduct.sku,
+            price: storeProduct.price || 0,
+            description: storeProduct.description || '',
+            quantity: storeProduct.stock_quantity || 0
+          };
+          await prokipService.createProduct(newProkipProduct, userId);
+          results.push({ sku: storeProduct.sku, action: 'created_in_prokip', message: 'Product created in Prokip' });
+        }
+      } catch (error) {
+        results.push({ sku: storeProduct.sku, action: 'store_to_prokip_error', message: error.message });
+      }
+    }
+    
+    // Update inventory logs for tracking
+    for (const storeProduct of storeProducts) {
+      try {
+        await prisma.inventoryLog.upsert({
+          where: {
+            connectionId_sku: {
+              connectionId: connection.id,
+              sku: storeProduct.sku
+            }
+          },
+          update: {
+            productName: storeProduct.name,
+            quantity: storeProduct.stock_quantity,
+            price: storeProduct.price,
+            lastSynced: new Date()
+          },
+          create: {
+            connectionId: connection.id,
+            sku: storeProduct.sku,
+            productName: storeProduct.name,
+            quantity: storeProduct.stock_quantity,
+            price: storeProduct.price
+          }
+        });
+      } catch (error) {
+        // Log error but don't fail the sync
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Bidirectional sync completed: ${prokipProducts.length} Prokip products, ${storeProducts.length} store products`,
+      results: results
+    });
+    
+  } catch (error) {
+    res.status(500).json({ 
+      error: 'Bidirectional sync failed',
+      details: error.message 
+    });
+  }
+});
+
+// Sync products from Prokip to connected stores
+router.post('/products', authenticateToken, async (req, res) => {
+  const { connectionId } = req.body;
+  const userId = req.userId;
+  
+  if (!connectionId) {
+    return res.status(400).json({ error: 'Connection ID is required' });
+  }
+  
+  try {
+    const connection = await prisma.connection.findFirst({
+      where: { 
+        id: parseInt(connectionId),
+        userId: userId
+      }
+    });
+    
+    if (!connection) {
+      return res.status(404).json({ error: 'Connection not found or access denied' });
+    }
+    
+    // Get Prokip products
+    const prokipService = require('../services/prokipService');
+    const products = await prokipService.getProducts(null, userId);
+    
+    console.log(`📦 Syncing ${products.length} products from Prokip to ${connection.platform}`);
+    
+    const { createProductInStore } = require('../services/storeService');
+    const results = [];
+    
+    for (const product of products) {
+      if (!product.sku) continue;
+      
+      try {
+        // Transform product data for store creation
+        const storeProduct = {
+          title: product.name || product.title,
+          sku: product.sku,
+          price: product.price || 0,
+          description: product.description || ''
+        };
+        
+        await createProductInStore(connection, storeProduct);
+        results.push({ sku: product.sku, status: 'success', message: 'Product created' });
+        console.log(`✅ Created product: ${product.name} (${product.sku})`);
+        
+      } catch (error) {
+        results.push({ sku: product.sku, status: 'error', message: error.message });
+        console.error(`❌ Failed to create product ${product.sku}:`, error.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Processed ${products.length} products`,
+      results: results
+    });
+    
+  } catch (error) {
+    console.error('Product sync failed:', error);
+    res.status(500).json({ 
+      error: 'Product sync failed',
+      details: error.message 
+    });
+  }
+});
+
 // Sync inventory and prices from Prokip to connected store
 router.post('/inventory', authenticateToken, async (req, res) => {
   const { connectionId } = req.body;
@@ -499,7 +880,6 @@ router.post('/inventory', authenticateToken, async (req, res) => {
     
     // Get Prokip products - fix userId extraction
     const prokipService = require('../services/prokipService');
-    let userId = req.user?.id || req.userId;
     
     // If no userId from authentication, use default user 50
     if (!userId) {

@@ -1,8 +1,6 @@
 const axios = require('axios');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const prokipService = require('./prokipService');
-
-const prisma = new PrismaClient();
 const MOCK_PROKIP = process.env.MOCK_PROKIP === 'true';
 const PROKIP_BASE = MOCK_PROKIP 
   ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'

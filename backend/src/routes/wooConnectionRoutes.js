@@ -1,10 +1,9 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const wooSecureService = require('../services/wooSecureService');
 const authenticateToken = require('../middlewares/authMiddleware');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 /**
  * Middleware to authenticate all routes - supports both JWT and Prokip tokens
@@ -27,8 +26,7 @@ router.use((req, res, next) => {
     return next();
   } catch (jwtError) {
     // If JWT fails, try Prokip token
-    const { PrismaClient } = require('@prisma/client');
-    const prisma = new PrismaClient();
+    const prisma = require('../lib/prisma');
     
     prisma.prokipConfig.findMany()
       .then(allConfigs => {
@@ -45,9 +43,6 @@ router.use((req, res, next) => {
       .catch(error => {
         console.error('Authentication error:', error);
         return res.status(500).json({ error: 'Authentication failed' });
-      })
-      .finally(() => {
-        prisma.$disconnect();
       });
   }
 });

@@ -1,10 +1,9 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const wooAppPasswordServiceEnhanced = require('../services/wooAppPasswordServiceEnhanced');
 const { getWooProducts } = require('../services/wooService');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 /**
  * Enhanced WooCommerce connection route with Application Password support

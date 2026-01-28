@@ -1,7 +1,5 @@
 const axios = require('axios');
-const { PrismaClient } = require('@prisma/client');
-
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 
 // Prokip OAuth credentials
 const PROKIP_CLIENT_ID = '6';

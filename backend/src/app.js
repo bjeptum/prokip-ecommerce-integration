@@ -1,10 +1,11 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('./lib/prisma');
 const bcrypt = require('bcryptjs');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
+const packageJson = require('../package.json');
 const authRoutes = require('./routes/authRoutes');
 const connectionRoutes = require('./routes/connectionRoutes');
 const wooConnectionRoutes = require('./routes/wooConnectionRoutes');
@@ -20,7 +21,6 @@ const bidirectionalSyncRoutes = require('./routes/bidirectionalSyncRoutes');
 // const swaggerDocument = YAML.load(path.join(__dirname, '../../docs/openapi.yaml'));
 
 const app = express();
-const prisma = new PrismaClient();
 
 // Ensure there is at least one admin user to allow login.
 async function ensureDefaultUser() {
@@ -34,17 +34,30 @@ async function ensureDefaultUser() {
 
   const hashed = await bcrypt.hash(password, 10);
   await prisma.user.create({ data: { username, password: hashed } });
-  console.log(`Default admin user '${username}' created from env DEFAULT_ADMIN_USER/DEFAULT_ADMIN_PASS`);
 }
 
 // Middleware
-app.use(cors());
+const corsOptions = {
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://yourdomain.com'] // Add your production domains
+    : ['http://localhost:3000', 'http://localhost:3001'],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Request logging
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  const start = Date.now();
+  
+  res.on('finish', () => {
+    console.log(
+      `${req.method} ${req.originalUrl} ${res.statusCode} - ${Date.now() - start}ms` 
+    );
+  });
+  
   next();
 });
 
@@ -53,7 +66,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    version: '2.0.0-secure'
+    version: packageJson.version || '1.0.0'
   });
 });
 
@@ -85,11 +98,28 @@ app.get('/', (req, res) => {
 
 // Error handling middleware
 app.use((error, req, res, next) => {
-  console.error('Unhandled error:', error);
+  // Log the error
+  console.error('Unhandled error:', {
+    message: error.message,
+    stack: error.stack,
+    url: req.originalUrl,
+    method: req.method,
+    timestamp: new Date().toISOString()
+  });
   
   // Don't expose sensitive error details in production
   const isDevelopment = process.env.NODE_ENV === 'development';
   
+  // Handle different error types
+  if (error.status || error.statusCode) {
+    const statusCode = error.status || error.statusCode;
+    return res.status(statusCode).json({
+      error: error.message || 'Request failed',
+      ...(isDevelopment && { stack: error.stack })
+    });
+  }
+  
+  // Default error response
   res.status(500).json({
     error: 'Internal server error',
     message: isDevelopment ? error.message : 'Something went wrong',
@@ -125,17 +155,21 @@ async function startServer() {
   try {
     // Test database connection
     await prisma.$connect();
-    console.log('✅ Database connected');
+    console.log('✅ Database connected successfully');
     
     // Ensure default admin user exists
     await ensureDefaultUser();
+    console.log('✅ Default user check completed');
     
     // Start server
     app.listen(PORT, () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);
+      console.log(`📊 Health check: http://localhost:${PORT}/health`);
+      console.log(`🌐 Frontend: http://localhost:${PORT}`);
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);
+    console.error('Stack trace:', error.stack);
     process.exit(1);
   }
 }

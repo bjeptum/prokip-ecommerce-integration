@@ -1,12 +1,12 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { getShopifyProducts, getShopifyOrders } = require('../services/shopifyService');
 const { getWooProducts, getWooOrders } = require('../services/wooService');
 const wooSimpleAppPassword = require('../services/wooSimpleAppPassword');
 const wooSecureService = require('../services/wooSecureService');
+const authenticateToken = require('../middlewares/authMiddleware');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Custom authentication middleware for store routes
 router.use(async (req, res, next) => {
@@ -344,10 +344,9 @@ router.get('/my-store/products', async (req, res) => {
       // Use specific connection ID
       connectionId = parseInt(connectionId);
     } else {
-      // Fallback: find first WooCommerce connection (backward compatibility)
+      // Fallback: find first connection (either WooCommerce or Shopify)
       const firstConnection = await prisma.connection.findFirst({
         where: { 
-          platform: 'woocommerce',
           userId: req.userId
         }
       });
@@ -355,29 +354,55 @@ router.get('/my-store/products', async (req, res) => {
     }
 
     if (!connectionId) {
-      return res.status(404).json({ error: 'No WooCommerce store found for this user' });
+      return res.status(404).json({ error: 'No store connections found for this user' });
     }
 
-    // Find the specific connection
+    // Find the specific connection (support both platforms)
     const connection = await prisma.connection.findFirst({
       where: { 
         id: connectionId,
-        platform: 'woocommerce',
         userId: req.userId
       }
     });
 
     if (!connection) {
-      return res.status(404).json({ error: 'WooCommerce store not found' });
+      return res.status(404).json({ error: 'Store connection not found' });
     }
 
-    console.log(`📦 Fetching products for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}`);
+    console.log(`📦 Fetching products for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}, platform: ${connection.platform}`);
     
     let products = [];
     
     if (connection.platform === 'woocommerce') {
       // Use the enhanced WooCommerce product fetching
       products = await fetchWooCommerceProducts(connection);
+      
+      // Add location information to each product for frontend filtering
+      products = products.map(product => ({
+        ...product,
+        locationId: prokipConfig.locationId,
+        userId: req.userId
+      }));
+    } else if (connection.platform === 'shopify') {
+      // Use Shopify product fetching
+      products = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+      
+      // Transform Shopify products to match frontend expectations
+      products = products.map(shopifyProduct => {
+        const variant = shopifyProduct.variants && shopifyProduct.variants[0] ? shopifyProduct.variants[0] : {};
+        return {
+          id: shopifyProduct.id,
+          name: shopifyProduct.title,
+          title: shopifyProduct.title,
+          sku: variant.sku || shopifyProduct.handle || 'N/A',
+          price: variant.price || 0,
+          stock_quantity: variant.inventory_quantity || 0,
+          created_at: shopifyProduct.created_at,
+          updated_at: shopifyProduct.updated_at,
+          vendor: shopifyProduct.vendor,
+          product_type: shopifyProduct.product_type
+        };
+      });
       
       // Add location information to each product for frontend filtering
       products = products.map(product => ({
@@ -423,10 +448,9 @@ router.get('/my-store/orders', async (req, res) => {
       // Use specific connection ID
       connectionId = parseInt(connectionId);
     } else {
-      // Fallback: find first WooCommerce connection (backward compatibility)
+      // Fallback: find first connection (either WooCommerce or Shopify)
       const firstConnection = await prisma.connection.findFirst({
         where: { 
-          platform: 'woocommerce',
           userId: req.userId
         }
       });
@@ -434,28 +458,36 @@ router.get('/my-store/orders', async (req, res) => {
     }
 
     if (!connectionId) {
-      return res.status(404).json({ error: 'No WooCommerce store found for this user' });
+      return res.status(404).json({ error: 'No store connections found for this user' });
     }
 
-    // Find the specific connection
+    // Find the specific connection (support both platforms)
     const connection = await prisma.connection.findFirst({
       where: { 
         id: connectionId,
-        platform: 'woocommerce',
         userId: req.userId
       }
     });
 
     if (!connection) {
-      return res.status(404).json({ error: 'WooCommerce store not found' });
+      return res.status(404).json({ error: 'Store connection not found' });
     }
 
-    console.log(`💰 Fetching orders for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}`);
+    console.log(`💰 Fetching orders for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}, platform: ${connection.platform}`);
     
     let orders = [];
     
     if (connection.platform === 'woocommerce') {
       orders = await fetchWooCommerceOrders(connection);
+      
+      // Add location information to each order for frontend filtering
+      orders = orders.map(order => ({
+        ...order,
+        locationId: prokipConfig.locationId,
+        userId: req.userId
+      }));
+    } else if (connection.platform === 'shopify') {
+      orders = await getShopifyOrders(connection.storeUrl, connection.accessToken);
       
       // Add location information to each order for frontend filtering
       orders = orders.map(order => ({
@@ -482,7 +514,7 @@ router.get('/my-store/orders', async (req, res) => {
   }
 });
 
-// Dynamic endpoint - find user's WooCommerce analytics automatically
+// Dynamic endpoint - find user's store analytics automatically
 router.get('/my-store/analytics', async (req, res) => {
   try {
     // Get user's Prokip config to ensure location-based isolation
@@ -494,16 +526,15 @@ router.get('/my-store/analytics', async (req, res) => {
       return res.status(404).json({ error: 'No Prokip configuration found for this user' });
     }
 
-    // Find WooCommerce connection for current user and location
+    // Find store connection for current user (either WooCommerce or Shopify)
     const connection = await prisma.connection.findFirst({
       where: { 
-        platform: 'woocommerce',
         userId: req.userId 
       }
     });
 
     if (!connection) {
-      return res.status(404).json({ error: 'No WooCommerce store found for this user' });
+      return res.status(404).json({ error: 'No store connections found for this user' });
     }
 
     console.log(`📊 Fetching analytics for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}`);
@@ -805,6 +836,90 @@ router.get('/:id/sales', async (req, res) => {
   } catch (error) {
     console.error('Error fetching store sales:', error);
     res.status(500).json({ error: 'Failed to fetch sales' });
+  }
+});
+
+// Get all synced products from both Prokip and store
+router.get('/synced-products', authenticateToken, async (req, res) => {
+  try {
+    const connectionId = parseInt(req.query.connectionId);
+    const userId = req.userId;
+    
+    if (!connectionId) {
+      return res.status(400).json({ error: 'Connection ID is required' });
+    }
+    
+    const connection = await prisma.connection.findFirst({
+      where: { 
+        id: connectionId,
+        userId: userId
+      }
+    });
+    
+    if (!connection) {
+      return res.status(404).json({ error: 'Connection not found or access denied' });
+    }
+    
+    const prokipService = require('../services/prokipService');
+    let allProducts = [];
+    
+    // Get Prokip products
+    const prokipProducts = await prokipService.getProducts(null, userId);
+    
+    // Get store products
+    let storeProducts = [];
+    if (connection.platform === 'shopify') {
+      const { getShopifyProducts } = require('../services/shopifyService');
+      storeProducts = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+      storeProducts = storeProducts.map(shopifyProduct => {
+        const variant = shopifyProduct.variants && shopifyProduct.variants[0] ? shopifyProduct.variants[0] : {};
+        return {
+          id: shopifyProduct.id,
+          name: shopifyProduct.title,
+          sku: variant.sku || shopifyProduct.handle || 'N/A',
+          price: parseFloat(variant.price) || 0,
+          stock_quantity: variant.inventory_quantity || 0,
+          source: 'shopify'
+        };
+      });
+    }
+    
+    // Combine and mark sync status
+    for (const prokipProduct of prokipProducts) {
+      const storeProduct = storeProducts.find(sp => sp.sku === prokipProduct.sku);
+      allProducts.push({
+        ...prokipProduct,
+        source: 'prokip',
+        syncedToStore: !!storeProduct,
+        storeStock: storeProduct ? storeProduct.stock_quantity : null,
+        stockDifference: storeProduct ? (prokipProduct.quantity || 0) - storeProduct.stock_quantity : null
+      });
+    }
+    
+    for (const storeProduct of storeProducts) {
+      const prokipProduct = allProducts.find(ap => ap.sku === storeProduct.sku);
+      if (!prokipProduct) {
+        allProducts.push({
+          ...storeProduct,
+          source: 'store',
+          syncedToProkip: false,
+          prokipStock: null
+        });
+      }
+    }
+    
+    res.json({
+      products: allProducts,
+      connectionId: connection.id,
+      platform: connection.platform
+    });
+    
+  } catch (error) {
+    console.error('Error fetching synced products:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch synced products',
+      details: error.message 
+    });
   }
 });
 

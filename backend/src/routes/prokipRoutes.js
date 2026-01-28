@@ -1,13 +1,12 @@
 const express = require('express');
 const axios = require('axios');
 const { body, validationResult } = require('express-validator');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { createProductInStore, updateInventoryInStore } = require('../services/storeService');
 const prokipService = require('../services/prokipService');
 const authenticateToken = require('../middlewares/authMiddleware');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 const MOCK_PROKIP = process.env.MOCK_PROKIP === 'true';
 const PROKIP_BASE = MOCK_PROKIP 
   ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'

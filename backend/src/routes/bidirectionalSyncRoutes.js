@@ -1,10 +1,9 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const axios = require('axios');
 const { decryptCredentials } = require('../services/storeService');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Authentication middleware
 router.use((req, res, next) => {
@@ -480,8 +479,6 @@ router.post('/sync-woocommerce', async (req, res) => {
   } catch (error) {
     console.error('❌ Sync failed:', error);
     res.status(500).json({ error: error.message });
-  } finally {
-    await prisma.$disconnect();
   }
 });
 

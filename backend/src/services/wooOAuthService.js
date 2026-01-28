@@ -9,14 +9,9 @@ const { getWooBaseUrl } = require('./wooService');
 
 class WooOAuthService {
   constructor() {
-    this.clientId = process.env.WOOCOMMERCE_CLIENT_ID;
-    this.clientSecret = process.env.WOOCOMMERCE_CLIENT_SECRET;
-    this.callbackUrl = process.env.WOOCOMMERCE_CALLBACK_URL || 
-      `http://localhost:${process.env.PORT || 3000}/connections/callback/woocommerce`;
-    
-    if (!this.clientId || !this.clientSecret) {
-      console.warn('WooCommerce OAuth credentials not configured. Please set WOOCOMMERCE_CLIENT_ID and WOOCOMMERCE_CLIENT_SECRET in .env');
-    }
+    // Note: This OAuth service is not used in current implementation
+    // We use Consumer Key/Secret authentication instead
+    this.callbackUrl = `http://localhost:${process.env.PORT || 3000}/connections/callback/woocommerce`;
   }
 
   /**

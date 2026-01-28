@@ -1,12 +1,11 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { getShopifyProducts, getShopifyOrders } = require('../services/shopifyService');
 const { getWooProducts, getWooOrders } = require('../services/wooService');
 const wooSecureService = require('../services/wooSecureService');
 const authenticateToken = require('../middlewares/authMiddleware');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Middleware to authenticate all routes
 router.use(authenticateToken);

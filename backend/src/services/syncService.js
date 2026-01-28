@@ -1,10 +1,8 @@
 const axios = require('axios');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { updateInventoryInStore } = require('./storeService');
 const { mapOrderToProkipSell, mapRefundToProkipProducts, mapCancellationProducts } = require('./prokipMapper');
 const prokipService = require('./prokipService');
-
-const prisma = new PrismaClient();
 const MOCK_PROKIP = process.env.MOCK_PROKIP === 'true';
 const PROKIP_BASE = MOCK_PROKIP 
   ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'
@@ -13,21 +11,62 @@ const PROKIP_BASE = MOCK_PROKIP
 /**
  * Log sync errors to database for tracking and resolution
  */
-async function logSyncError(connectionId, orderId, errorType, errorMessage, errorData = null) {
+async function logSyncError(connectionId, orderId, errorType, errorMessage, errorData = null, operationContext = null) {
   try {
+    const errorDetails = {
+      originalError: errorMessage,
+      errorData: errorData,
+      operationContext: operationContext,
+      timestamp: new Date().toISOString(),
+      recoveryAttempts: 0
+    };
+
     await prisma.syncError.create({
       data: {
         connectionId,
         orderId: orderId?.toString(),
         errorType,
         errorMessage,
-        errorData: errorData ? JSON.parse(JSON.stringify(errorData)) : null
+        errorDetails: JSON.stringify(errorDetails)
       }
     });
-    console.error(`[SyncError] ${errorType}: ${errorMessage}`, errorData);
+    console.error(`[SyncError] ${errorType}: ${errorMessage}`, errorDetails);
+    
+    // Trigger automatic error recovery for non-critical errors
+    if (shouldAttemptAutoRecovery(errorType, errorMessage)) {
+      setTimeout(async () => {
+        try {
+          const errorRecoveryService = require('./errorRecoveryService');
+          await errorRecoveryService.processErrorRecovery();
+        } catch (recoveryError) {
+          console.error('Auto-recovery failed:', recoveryError.message);
+        }
+      }, 5000); // Wait 5 seconds before attempting recovery
+    }
   } catch (err) {
     console.error('Failed to log sync error:', err.message);
   }
+}
+
+/**
+ * Determine if error should trigger automatic recovery
+ */
+function shouldAttemptAutoRecovery(errorType, errorMessage) {
+  const message = errorMessage.toLowerCase();
+  
+  // Don't auto-recover critical errors that need manual intervention
+  const noAutoRecoveryErrors = [
+    'invalid credentials',
+    'account suspended',
+    'api key revoked',
+    'permission denied'
+  ];
+  
+  const shouldNotRecover = noAutoRecoveryErrors.some(error => 
+    message.includes(error)
+  );
+  
+  return !shouldNotRecover && ['inventory', 'order', 'product'].includes(errorType);
 }
 
 /**

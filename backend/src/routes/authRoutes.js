@@ -1,12 +1,11 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { body, validationResult } = require('express-validator');
 const prokipService = require('../services/prokipService');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Authentication middleware for logout
 const authenticateToken = (req, res, next) => {
