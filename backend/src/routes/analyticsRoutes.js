@@ -7,7 +7,7 @@ const router = express.Router();
 
 /**
  * Record a sale with platform prefix
- * POST /api/sales/record
+ * POST /api/sales/rescord
  */
 router.post('/record', authenticateToken, async (req, res) => {
   try {

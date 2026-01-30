@@ -708,4 +708,168 @@ router.get('/purchases', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * Save opening stock to Prokip
+ */
+router.post('/opening-stock/save', authenticateToken, [
+  body('stockData').isArray().withMessage('stockData must be an array'),
+  body('stockData.*.productId').notEmpty().withMessage('productId is required for each stock item'),
+  body('stockData.*.quantity').isInt({ min: 0 }).withMessage('quantity must be a non-negative integer')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const userId = req.userId || req.user?.id;
+    const { stockData } = req.body;
+
+    console.log('💾 Saving opening stock to Prokip for user:', userId);
+    
+    const result = await prokipService.saveOpeningStock(stockData, userId);
+    
+    res.json({
+      success: true,
+      message: 'Opening stock saved successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Failed to save opening stock:', error.message);
+    res.status(500).json({ 
+      error: 'Could not save opening stock to Prokip',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Get opening stock from Prokip
+ */
+router.get('/opening-stock', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId || req.user?.id;
+    const { locationId } = req.query;
+
+    console.log('📊 Getting opening stock from Prokip for user:', userId);
+    
+    const openingStock = await prokipService.getOpeningStock(locationId, userId);
+    
+    res.json({
+      success: true,
+      data: openingStock
+    });
+  } catch (error) {
+    console.error('Failed to fetch opening stock:', error.message);
+    res.status(500).json({ 
+      error: 'Could not fetch opening stock from Prokip',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Create stock adjustment in Prokip
+ */
+router.post('/stock-adjustments', authenticateToken, [
+  body('products').isArray().withMessage('products must be an array'),
+  body('products.*.productId').notEmpty().withMessage('productId is required for each product'),
+  body('products.*.quantity').isInt({ min: 0 }).withMessage('quantity must be a non-negative integer'),
+  body('products.*.adjustmentType').isIn(['add', 'subtract']).withMessage('adjustmentType must be add or subtract')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const userId = req.userId || req.user?.id;
+    const { locationId, adjustmentDate, reason, totalAmount, products } = req.body;
+
+    console.log('📝 Creating stock adjustment in Prokip for user:', userId);
+    
+    const adjustmentData = {
+      locationId,
+      adjustmentDate,
+      reason,
+      totalAmount,
+      products
+    };
+    
+    const result = await prokipService.createStockAdjustment(adjustmentData, userId);
+    
+    res.json({
+      success: true,
+      message: 'Stock adjustment created successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Failed to create stock adjustment:', error.message);
+    res.status(500).json({ 
+      error: 'Could not create stock adjustment in Prokip',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Get stock adjustments from Prokip
+ */
+router.get('/stock-adjustments', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId || req.user?.id;
+    const { locationId, startDate, endDate } = req.query;
+
+    console.log('📋 Getting stock adjustments from Prokip for user:', userId);
+    
+    const adjustments = await prokipService.getStockAdjustments(locationId, startDate, endDate, userId);
+    
+    res.json({
+      success: true,
+      data: adjustments
+    });
+  } catch (error) {
+    console.error('Failed to fetch stock adjustments:', error.message);
+    res.status(500).json({ 
+      error: 'Could not fetch stock adjustments from Prokip',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Deduct stock from Prokip (for WooCommerce sales)
+ */
+router.post('/stock-deduct', authenticateToken, [
+  body('products').isArray().withMessage('products must be an array'),
+  body('products.*.productId').notEmpty().withMessage('productId is required for each product'),
+  body('products.*.quantity').isInt({ min: 1 }).withMessage('quantity must be a positive integer')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const userId = req.userId || req.user?.id;
+    const { products, locationId, reason } = req.body;
+
+    console.log('📦 Deducting stock from Prokip for user:', userId);
+    
+    const result = await prokipService.deductStockFromProkip(products, locationId, reason, userId);
+    
+    res.json({
+      success: true,
+      message: 'Stock deducted successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Failed to deduct stock:', error.message);
+    res.status(500).json({ 
+      error: 'Could not deduct stock from Prokip',
+      details: error.message 
+    });
+  }
+});
+
 module.exports = router;

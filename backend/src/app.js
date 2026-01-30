@@ -17,6 +17,10 @@ const setupRoutes = require('./routes/setupRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const bidirectionalSyncRoutes = require('./routes/bidirectionalSyncRoutes');
 
+// Custom CSRF protection (since csurf is deprecated)
+const crypto = require('crypto');
+const cookieParser = require('cookie-parser');
+
 // Load OpenAPI specification (commented out for now)
 // const swaggerDocument = YAML.load(path.join(__dirname, '../../docs/openapi.yaml'));
 
@@ -47,6 +51,60 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+
+// Custom CSRF protection implementation
+const csrfTokens = new Map();
+
+// Generate CSRF token
+const generateCSRFToken = () => {
+  return crypto.randomBytes(32).toString('hex');
+};
+
+// CSRF protection middleware
+const csrfProtection = (req, res, next) => {
+  // Skip CSRF for GET, HEAD, OPTIONS requests
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    return next();
+  }
+  
+  // Skip CSRF for webhook endpoints (they're authenticated differently)
+  if (req.path.includes('/webhooks/') || req.path.includes('/connections/webhook')) {
+    return next();
+  }
+  
+  const token = req.headers['x-csrf-token'] || req.body._csrf;
+  const sessionToken = req.cookies?.csrf_session;
+  
+  if (!sessionToken || !csrfTokens.has(sessionToken) || csrfTokens.get(sessionToken) !== token) {
+    return res.status(403).json({ error: 'Invalid CSRF token' });
+  }
+  
+  next();
+};
+
+// CSRF token generation endpoint
+app.get('/api/csrf-token', (req, res) => {
+  const sessionToken = generateCSRFToken();
+  const csrfToken = generateCSRFToken();
+  
+  csrfTokens.set(sessionToken, csrfToken);
+  
+  // Clean up old tokens (keep only last 100)
+  if (csrfTokens.size > 100) {
+    const keysToDelete = Array.from(csrfTokens.keys()).slice(0, -50);
+    keysToDelete.forEach(key => csrfTokens.delete(key));
+  }
+  
+  res.cookie('csrf_session', sessionToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: 3600000 // 1 hour
+  });
+  
+  res.json({ csrfToken });
+});
 
 // Request logging
 app.use((req, res, next) => {
@@ -83,9 +141,11 @@ app.use('/woo-connections', wooConnectionRoutes);
 app.use('/stores', storeRoutes);
 app.use('/sync', syncRoutes);
 app.use('/webhooks', webhookRoutes);
+app.use('/connections/webhook', webhookRoutes); // Add route for ngrok webhook URL
 app.use('/prokip', prokipRoutes);
 app.use('/setup', setupRoutes);
-app.use('/api', analyticsRoutes);
+app.use('/api/sales', csrfProtection, analyticsRoutes); // Apply CSRF to sales routes
+app.use('/api/analytics', csrfProtection, analyticsRoutes); // Apply CSRF to analytics routes
 app.use('/bidirectional-sync', bidirectionalSyncRoutes);
 
 // Serve static files (for frontend)

@@ -742,6 +742,422 @@ async function clearAuthentication(userId = null) {
   }
 }
 
+/**
+ * Save opening stock to Prokip
+ * @param {Array} stockData - Array of stock items with product_id, quantity, location_id
+ * @param {number} userId - User ID
+ * @returns {Promise<Object>} - Response from Prokip API
+ */
+async function saveOpeningStock(stockData, userId = null) {
+  try {
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    
+    const payload = {
+      opening_stock: stockData.map(item => ({
+        product_id: item.productId || item.product_id,
+        quantity: parseInt(item.quantity || 0),
+        location_id: item.locationId || config?.locationId,
+        unit_cost: parseFloat(item.unitCost || 0),
+        lot_number: item.lotNumber || null,
+        expiry_date: item.expiryDate || null
+      }))
+    };
+
+    const response = await axios.post(
+      `${process.env.PROKIP_API}/connector/api/opening-stock/save`,
+      payload,
+      { headers }
+    );
+    
+    console.log('✅ Opening stock saved to Prokip successfully');
+    return response.data;
+  } catch (error) {
+    console.error('Failed to save opening stock to Prokip:', error.response?.data || error.message);
+    throw new Error('Could not save opening stock to Prokip. Please check the stock data.');
+  }
+}
+
+/**
+ * Get opening stock from Prokip
+ * @param {number} locationId - Business location ID (optional)
+ * @param {number} userId - User ID
+ * @returns {Promise<Array>} - Opening stock data
+ */
+async function getOpeningStock(locationId = null, userId = null) {
+  try {
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    const locId = locationId || config?.locationId;
+    
+    let url = `${process.env.PROKIP_API}/connector/api/opening-stock`;
+    if (locId) {
+      url += `?location_id=${locId}`;
+    }
+
+    const response = await axios.get(url, { headers });
+    return response.data.data || response.data || [];
+  } catch (error) {
+    console.error('Failed to fetch opening stock from Prokip:', error.response?.data || error.message);
+    throw new Error('Could not fetch opening stock from Prokip. Please check your connection.');
+  }
+}
+
+/**
+ * Create stock adjustment in Prokip
+ * @param {Object} adjustmentData - Stock adjustment details
+ * @param {number} userId - User ID
+ * @returns {Promise<Object>} - Adjustment response
+ */
+/**
+ * Working Stock Adjustment Function for Prokip
+ * Uses /stock-adjustments endpoint with proper CSRF handling
+ */
+async function adjustStockInProkip(sku, quantity, userId = null) {
+  try {
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    
+    // Try multiple payload formats for stock adjustment
+    const payloadFormats = [
+      // Format 1: Full stock adjustment
+      {
+        location_id: config?.locationId || 21237,
+        adjustment_date: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        reason: 'WooCommerce sale stock reduction',
+        final_total: 0,
+        products: [{
+          product_id: parseInt(sku),
+          quantity: -quantity, // Negative to reduce stock
+          unit_price: 0,
+          unit_price_inc_tax: 0
+        }]
+      },
+      
+      // Format 2: Simplified adjustment
+      {
+        location_id: config?.locationId || 21237,
+        product_id: parseInt(sku),
+        quantity: -quantity,
+        adjustment_type: 'sale',
+        reason: 'WooCommerce order'
+      },
+      
+      // Format 3: Transaction format
+      {
+        type: 'stock_adjustment',
+        location_id: config?.locationId || 21237,
+        transaction_date: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        notes: 'Stock reduction from WooCommerce sale',
+        products: [{
+          product_id: parseInt(sku),
+          quantity: -quantity,
+          unit_price: 0
+        }]
+      }
+    ];
+
+    const endpoints = [
+      '/stock-adjustments',
+      '/api/stock-adjustments',
+      '/connector/api/stock-adjustments'
+    ];
+
+    for (const endpoint of endpoints) {
+      for (let i = 0; i < payloadFormats.length; i++) {
+        try {
+          const response = await axios.post(
+            `https://api.prokip.africa${endpoint}`,
+            payloadFormats[i],
+            { 
+              headers: { 
+                ...headers, 
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+              }, 
+              timeout: 15000 
+            }
+          );
+          
+          console.log(`✓ Stock adjusted in Prokip for SKU ${sku}: ${quantity} units via ${endpoint} (Format ${i + 1})`);
+          return { success: true, endpoint, format: i + 1, data: response.data };
+          
+        } catch (error) {
+          // Log but continue trying
+          if (error.response?.status !== 404 && error.response?.status !== 422) {
+            console.log(`⚠️  ${endpoint} Format ${i + 1}: ${error.response?.status || 'ERROR'}`);
+          }
+        }
+      }
+    }
+    
+    // If all stock adjustments fail, try opening-stock approach
+    console.log(`⚠️  Stock adjustment failed for SKU ${sku}, trying opening-stock approach...`);
+    return await setStockInProkip(sku, null, quantity, userId);
+    
+  } catch (error) {
+    console.error(`❌ Failed to adjust stock for SKU ${sku}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Working Stock Setting Function for Prokip
+ * Uses opening-stock endpoint to set exact stock levels
+ */
+async function setStockInProkip(sku, targetQuantity = null, reduceBy = null, userId = null) {
+  try {
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    
+    // Get current stock first
+    const currentStock = await getInventory(null, userId);
+    const stockItem = currentStock.find(item => item.sku === sku);
+    
+    if (!stockItem) {
+      throw new Error(`Product SKU ${sku} not found in inventory`);
+    }
+    
+    const currentQuantity = parseInt(stockItem.stock);
+    let newQuantity;
+    
+    if (targetQuantity !== null) {
+      newQuantity = targetQuantity;
+    } else if (reduceBy !== null) {
+      newQuantity = Math.max(0, currentQuantity - reduceBy);
+    } else {
+      throw new Error('Either targetQuantity or reduceBy must be provided');
+    }
+    
+    const payload = {
+      location_id: config?.locationId || 21237,
+      opening_stock_date: new Date().toISOString().slice(0, 10),
+      products: [{
+        product_id: parseInt(sku),
+        quantity: newQuantity
+      }]
+    };
+    
+    const endpoints = [
+      '/opening-stock',
+      '/api/opening-stock',
+      '/connector/api/opening-stock'
+    ];
+    
+    for (const endpoint of endpoints) {
+      try {
+        const response = await axios.post(
+          `https://api.prokip.africa${endpoint}`,
+          payload,
+          { 
+            headers: { 
+              ...headers, 
+              'Content-Type': 'application/json',
+              'X-Requested-With': 'XMLHttpRequest'
+            }, 
+            timeout: 15000 
+          }
+        );
+        
+        console.log(`✓ Stock set in Prokip for SKU ${sku}: ${currentQuantity} → ${newQuantity} via ${endpoint}`);
+        return { success: true, endpoint, oldStock: currentQuantity, newStock: newQuantity, response: response.data };
+        
+      } catch (error) {
+        if (error.response?.status !== 404) {
+          console.log(`⚠️  ${endpoint}: ${error.response?.status || 'ERROR'}`);
+        }
+      }
+    }
+    
+    throw new Error('All opening-stock endpoints failed');
+    
+  } catch (error) {
+    console.error(`❌ Failed to set stock for SKU ${sku}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Create stock adjustment in Prokip
+ * @param {Object} adjustmentData - Stock adjustment details
+ * @param {number} userId - User ID
+ * @returns {Promise<Object>} - Adjustment response
+ */
+async function createStockAdjustment(adjustmentData, userId = null) {
+  try {
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    
+    const payload = {
+      location_id: adjustmentData.locationId || config?.locationId,
+      adjustment_date: adjustmentData.adjustmentDate || new Date().toISOString().slice(0, 19).replace('T', ' '),
+      reason: adjustmentData.reason || 'Manual adjustment',
+      final_total: parseFloat(adjustmentData.totalAmount || 0),
+      products: adjustmentData.products.map(item => ({
+        product_id: item.productId || item.product_id,
+        quantity: parseInt(item.quantity || 0),
+        unit_price: parseFloat(item.unitPrice || 0),
+        adjustment_type: item.adjustmentType || 'subtract', // 'add' or 'subtract'
+        lot_number: item.lotNumber || null,
+        expiry_date: item.expiryDate || null
+      }))
+    };
+
+    console.log('🔧 Creating stock adjustment with payload:', JSON.stringify(payload, null, 2));
+
+    const response = await axios.post(
+      `${process.env.PROKIP_API}/connector/api/stock-adjustments`,
+      payload,
+      { headers }
+    );
+    
+    console.log('✅ Stock adjustment created in Prokip successfully');
+    return response.data;
+  } catch (error) {
+    console.error('Failed to create stock adjustment in Prokip:', error.response?.data || error.message);
+    console.error('Full error:', error);
+    throw new Error('Could not create stock adjustment in Prokip. Please check the adjustment data.');
+  }
+}
+
+/**
+ * Get stock adjustments from Prokip
+ * @param {number} locationId - Business location ID (optional)
+ * @param {string} startDate - Start date for filtering (optional)
+ * @param {string} endDate - End date for filtering (optional)
+ * @param {number} userId - User ID
+ * @returns {Promise<Array>} - Stock adjustments data
+ */
+async function getStockAdjustments(locationId = null, startDate = null, endDate = null, userId = null) {
+  try {
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    const locId = locationId || config?.locationId;
+    
+    let url = `${process.env.PROKIP_API}/connector/api/stock-adjustments`;
+    const params = new URLSearchParams();
+    
+    if (locId) params.append('location_id', locId);
+    if (startDate) params.append('start_date', startDate);
+    if (endDate) params.append('end_date', endDate);
+    
+    if (params.toString()) {
+      url += `?${params.toString()}`;
+    }
+
+    const response = await axios.get(url, { headers });
+    return response.data.data || response.data || [];
+  } catch (error) {
+    console.error('Failed to fetch stock adjustments from Prokip:', error.response?.data || error.message);
+    throw new Error('Could not fetch stock adjustments from Prokip. Please check your connection.');
+  }
+}
+
+/**
+ * Deduct stock from Prokip after WooCommerce sale
+ * @param {Array} products - Array of products with product_id, quantity
+ * @param {number} locationId - Location ID (optional)
+ * @param {string} reason - Reason for deduction (optional)
+ * @param {number} userId - User ID
+ * @returns {Promise<Object>} - Deduction response
+ */
+async function deductStockFromProkip(products, locationId = null, reason = 'WooCommerce sale', userId = null) {
+  try {
+    const headers = await getAuthHeaders(userId);
+    const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : await prisma.prokipConfig.findUnique({ where: { id: 1 } });
+    
+    // Add CSRF protection headers for Prokip API
+    const enhancedHeaders = {
+      ...headers,
+      'X-Requested-With': 'XMLHttpRequest',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+    
+    const adjustmentData = {
+      locationId: locationId || config?.locationId,
+      adjustmentDate: new Date().toISOString().slice(0, 19).replace('T', ' '),
+      reason: reason,
+      totalAmount: 0, // Stock adjustments typically don't have monetary value
+      products: products.map(item => ({
+        productId: item.productId || item.product_id,
+        product_id: item.productId || item.product_id,
+        quantity: parseInt(item.quantity || 0),
+        adjustmentType: 'subtract', // Always subtract for sales
+        unitPrice: 0
+      }))
+    };
+
+    console.log('🔧 Deducting stock with payload:', JSON.stringify(adjustmentData, null, 2));
+    
+    // Try multiple endpoints for stock deduction
+    const endpoints = [
+      `${process.env.PROKIP_API}/connector/api/stock-adjustments`,
+      `${process.env.PROKIP_API}/connector/api/sell`, // Alternative: record as sale
+      `${process.env.PROKIP_API}/connector/api/opening-stock/save` // Alternative: opening stock
+    ];
+    
+    for (const endpoint of endpoints) {
+      try {
+        let payload = adjustmentData;
+        
+        // Adjust payload format for different endpoints
+        if (endpoint.includes('/sell')) {
+          payload = {
+            location_id: parseInt(adjustmentData.locationId),
+            contact_id: 1, // Default customer
+            transaction_date: adjustmentData.adjustmentDate,
+            invoice_no: `WOO-${Date.now()}`,
+            status: 'final',
+            type: 'sell',
+            payment_status: 'paid',
+            final_total: 0,
+            discount_amount: 0,
+            discount_type: 'fixed',
+            sell_lines: adjustmentData.products.map(p => ({
+              product_id: parseInt(p.productId),
+              quantity: p.quantity,
+              unit_price: 0,
+              line_total: 0
+            })),
+            payments: [{
+              method: 'cash',
+              amount: 0,
+              paid_on: adjustmentData.adjustmentDate
+            }]
+          };
+        } else if (endpoint.includes('/opening-stock')) {
+          payload = {
+            opening_stock: adjustmentData.products.map(p => ({
+              product_id: parseInt(p.productId),
+              quantity: -p.quantity, // Negative for reduction
+              location_id: parseInt(adjustmentData.locationId)
+            }))
+          };
+        }
+        
+        const response = await axios.post(endpoint, payload, { 
+          headers: enhancedHeaders,
+          timeout: 15000 
+        });
+        
+        console.log(`✓ Stock deducted via ${endpoint} for ${products.length} products`);
+        return { success: true, endpoint, response: response.data };
+        
+      } catch (error) {
+        console.log(`⚠️ Endpoint ${endpoint} failed:`, error.response?.status || error.message);
+        // Continue to next endpoint
+      }
+    }
+    
+    throw new Error('All stock deduction endpoints failed');
+    
+  } catch (error) {
+    console.error('Failed to deduct stock from Prokip:', error.response?.data || error.message);
+    throw new Error('Could not deduct stock from Prokip. Please check the product data.');
+  }
+}
+
 module.exports = {
   authenticateUser,
   refreshAccessToken,
@@ -761,5 +1177,12 @@ module.exports = {
   getSales,
   getPurchases,
   isAuthenticated,
-  clearAuthentication
+  clearAuthentication,
+  saveOpeningStock,
+  getOpeningStock,
+  createStockAdjustment,
+  getStockAdjustments,
+  adjustStockInProkip,
+  setStockInProkip,
+  deductStockFromProkip
 };

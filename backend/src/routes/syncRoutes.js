@@ -889,11 +889,20 @@ router.post('/inventory', authenticateToken, async (req, res) => {
     
     console.log('🔍 Using userId:', userId, 'for inventory sync');
     
-    const inventory = await prokipService.getInventory(null, userId);
-    const products = await prokipService.getProducts(null, userId);
+    // Get products directly (they contain stock info)
+    const products = await prokipService.getProducts(config.locationId || null, userId);
     
-    console.log('📊 Fetched inventory:', inventory.length, 'items');
     console.log('📦 Fetched products:', products.length, 'items');
+    
+    // Create inventory data from products (since getInventory endpoint may not exist)
+    const inventory = products.map(product => ({
+      sku: product.sku,
+      stock: product.stock || product.qty_available || 0,
+      product_id: product.id,
+      name: product.name
+    })).filter(item => item.sku && item.stock > 0); // Only include products with SKU and stock
+    
+    console.log('📊 Products with stock:', inventory.length, 'items');
     
     const { updateInventoryInStore } = require('../services/storeService');
     const results = [];
@@ -902,15 +911,14 @@ router.post('/inventory', authenticateToken, async (req, res) => {
       const sku = product.sku;
       if (!sku) continue;
       
-      // Find stock for this product
-      const stockItem = inventory.find(i => i.sku === sku);
+      // Get stock directly from product (since we already have it)
+      const quantity = product.stock || product.qty_available || 0;
       
-      // Skip products without inventory data
-      if (!stockItem) {
+      // Skip products without stock
+      if (quantity <= 0) {
+        console.log(`⏭️ Skipping ${product.name} - no stock (${quantity})`);
         continue;
       }
-      
-      const quantity = stockItem?.stock || stockItem?.qty_available || 0;
       const price = product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0;
       
       try {

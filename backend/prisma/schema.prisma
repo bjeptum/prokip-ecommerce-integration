@@ -82,7 +82,7 @@ model InventoryLog {
 }
 
 model SalesLog {
-  id            Int      @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   connectionId  Int
   locationId    String? // Add locationId field
   orderId       String
@@ -95,7 +95,9 @@ model SalesLog {
   status        String?
   orderDate     DateTime
   syncedAt      DateTime @default(now())
-  prokipSellId  String? // Store Prokip transaction ID for refunds/cancellations
+  prokipSellId  String?  // Store Prokip transaction ID for refunds/cancellations
+  stockDeducted Boolean   @default(false) // Track if stock was deducted in Prokip
+  stockDeductionDate DateTime? // When stock was deducted
 
   // Relations
   connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)

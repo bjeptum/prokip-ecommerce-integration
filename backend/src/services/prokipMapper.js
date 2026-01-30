@@ -6,11 +6,11 @@ const PROKIP_BASE = MOCK_PROKIP
   ? (process.env.MOCK_PROKIP_URL || 'http://localhost:4000') + '/connector/api/'
   : process.env.PROKIP_API + '/connector/api/';
 
-async function getProkipProductIdBySku(sku) {
+async function getProkipProductIdBySku(sku, userId = null) {
   try {
     if (!MOCK_PROKIP) {
       // Use prokipService for real API
-      const product = await prokipService.getProductBySku(sku);
+      const product = await prokipService.getProductBySku(sku, userId);
       return product?.id || null;
     }
     
@@ -28,14 +28,22 @@ async function getProkipProductIdBySku(sku) {
   }
 }
 
-async function mapOrderToProkipSell(data, locationId, platform) {
+async function mapOrderToProkipSell(data, locationId, platform, userId = null) {
   const products = [];
   const lineItems = platform === 'shopify' ? data.line_items : data.line_items;
 
   for (const item of lineItems) {
-    if (!item.sku) continue;
-    const productId = await getProkipProductIdBySku(item.sku);
-    if (!productId) continue;
+    if (!item.sku) {
+      console.warn(`⚠️ Item without SKU found: ${item.name || 'Unknown product'}, skipping`);
+      continue;
+    }
+    
+    // Get Prokip product ID with proper error handling
+    const productId = await getProkipProductIdBySku(item.sku, userId);
+    if (!productId) {
+      console.warn(`⚠️ Product with SKU ${item.sku} not found in Prokip, skipping item`);
+      continue;
+    }
 
     // Calculate unit price with tax
     const unitPrice = parseFloat(item.price);
@@ -52,7 +60,10 @@ async function mapOrderToProkipSell(data, locationId, platform) {
     });
   }
 
-  if (products.length === 0) return null;
+  if (products.length === 0) {
+    console.warn(`⚠️ No valid products found for order ${data.id || data.number}`);
+    return null;
+  }
 
   // Extract discount amount
   let discountAmount = 0;
@@ -71,6 +82,8 @@ async function mapOrderToProkipSell(data, locationId, platform) {
   const prefix = platformPrefix[platform.toLowerCase()] || 'ONLINE';
   const orderId = (data.id || data.number || Date.now()).toString();
   const invoiceNo = `${prefix}-${orderId}`;
+
+  console.log(`📦 Mapped ${products.length} products for order ${orderId} (Invoice: ${invoiceNo})`);
 
   return {
     sells: [{

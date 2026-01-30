@@ -1,7 +1,7 @@
 const axios = require('axios');
 const prisma = require('../lib/prisma');
 const { updateInventoryInStore } = require('./storeService');
-const { mapOrderToProkipSell, mapRefundToProkipProducts, mapCancellationProducts } = require('./prokipMapper');
+const { mapOrderToProkipSell, mapRefundToProkipProducts, mapCancellationProducts, getProkipProductIdBySku } = require('./prokipMapper');
 const prokipService = require('./prokipService');
 const MOCK_PROKIP = process.env.MOCK_PROKIP === 'true';
 const PROKIP_BASE = MOCK_PROKIP 
@@ -24,10 +24,9 @@ async function logSyncError(connectionId, orderId, errorType, errorMessage, erro
     await prisma.syncError.create({
       data: {
         connectionId,
-        orderId: orderId?.toString(),
         errorType,
         errorMessage,
-        errorDetails: JSON.stringify(errorDetails)
+        errorDetails: errorData ? JSON.stringify(errorData) : null
       }
     });
     console.error(`[SyncError] ${errorType}: ${errorMessage}`, errorDetails);
@@ -341,7 +340,7 @@ async function processStoreToProkip(storeUrl, topic, data, platform, userId = nu
       }
 
       // Map order to Prokip sell format
-      const sellBody = await mapOrderToProkipSell(data, prokip.locationId, platform);
+      const sellBody = await mapOrderToProkipSell(data, prokip.locationId, platform, userId);
       if (!sellBody) {
         await logSyncError(
           connection.id,
@@ -364,30 +363,31 @@ async function processStoreToProkip(storeUrl, topic, data, platform, userId = nu
             }
           });
           
-          if (cache && cache.quantity < item.quantity) {
+          if (inventoryLog && inventoryLog.quantity < item.quantity) {
             await logSyncError(
               connection.id,
               orderId,
               'insufficient_inventory',
-              `Insufficient inventory for SKU ${item.sku}: available=${cache.quantity}, required=${item.quantity}`,
-              { sku: item.sku, available: cache.quantity, required: item.quantity }
+              `Insufficient inventory for SKU ${item.sku}: available=${inventoryLog.quantity}, required=${item.quantity}`,
+              { sku: item.sku, available: inventoryLog.quantity, required: item.quantity }
             );
             console.warn(`⚠️ Insufficient inventory for SKU ${item.sku}, but continuing with sale`);
           }
         }
       }
 
-      // Record sale in Prokip
+      // Record sale in Prokip using the correct sell endpoint format
       try {
         const response = await axios.post(PROKIP_BASE + 'sell', sellBody, { headers });
         const prokipSellId = response.data?.data?.[0]?.id || response.data?.id || null;
         
+        // Create sales log entry
         await prisma.salesLog.create({
           data: {
             connectionId: connection.id,
             orderId,
             orderNumber: data.order_number || data.number?.toString(),
-            invoiceNo: invoiceNo,
+            invoiceNo: sellBody.sells[0].invoice_no,
             platform: platform,
             customerName: data.customer?.first_name || data.billing?.first_name || 'Guest',
             customerEmail: data.customer?.email || data.billing?.email,
@@ -398,6 +398,86 @@ async function processStoreToProkip(storeUrl, topic, data, platform, userId = nu
           }
         });
         console.log(`✓ Sale recorded in Prokip for order ${orderId}${prokipSellId ? ` (Prokip ID: ${prokipSellId})` : ''}`);
+
+        // Wait a moment for sale to be processed
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Automatically reduce stock in Prokip using the improved functions
+        try {
+          let stockReduced = false;
+          
+          for (const item of lineItems || []) {
+            if (item.sku && item.quantity > 0) {
+              try {
+                // Use the improved deductStockFromProkip function with proper headers
+                const products = [{
+                  productId: item.sku,
+                  product_id: item.sku,
+                  quantity: item.quantity
+                }];
+                
+                await prokipService.deductStockFromProkip(products, prokip.locationId, 'WooCommerce sale', userId);
+                console.log(`✓ Automatically deducted stock for SKU ${item.sku}: ${item.quantity} units`);
+                stockReduced = true;
+                
+              } catch (deductError) {
+                console.log(`⚠️ Stock deduction failed for SKU ${item.sku}, trying adjustment...`);
+                
+                try {
+                  // Try stock adjustment as fallback
+                  await prokipService.adjustStockInProkip(item.sku, item.quantity, userId);
+                  console.log(`✓ Stock adjustment worked for SKU ${item.sku}: ${item.quantity} units`);
+                  stockReduced = true;
+                } catch (adjustError) {
+                  console.log(`⚠️ Stock adjustment failed for SKU ${item.sku}, trying stock setting...`);
+                  
+                  try {
+                    // Final fallback to stock setting
+                    await prokipService.setStockInProkip(item.sku, null, item.quantity, userId);
+                    console.log(`✓ Stock setting worked for SKU ${item.sku}: ${item.quantity} units`);
+                    stockReduced = true;
+                  } catch (setError) {
+                    console.log(`❌ All stock reduction methods failed for SKU ${item.sku}: ${setError.message}`);
+                  }
+                }
+              }
+            }
+          }
+          
+          // Update sales log to indicate stock status
+          await prisma.salesLog.updateMany({
+            where: { 
+              connectionId: connection.id,
+              orderId 
+            },
+            data: { 
+              stockDeducted: stockReduced,
+              stockDeductionDate: new Date()
+            }
+          });
+          
+          if (stockReduced) {
+            console.log(`✓ Stock automatically reduced in Prokip for order ${orderId}`);
+          } else {
+            console.log(`⚠️ Stock reduction in Prokip failed for order ${orderId}`);
+          }
+          
+        } catch (stockError) {
+          console.error(`❌ Failed to automatically reduce stock for order ${orderId}:`, stockError.message);
+          
+          // Still mark as processed but note the stock reduction failed
+          await prisma.salesLog.updateMany({
+            where: { 
+              connectionId: connection.id,
+              orderId 
+            },
+            data: { 
+              stockDeducted: false,
+              stockDeductionDate: new Date()
+            }
+          });
+        }
+
       } catch (error) {
         await logSyncError(
           connection.id,
@@ -406,7 +486,7 @@ async function processStoreToProkip(storeUrl, topic, data, platform, userId = nu
           'Failed to record sale in Prokip',
           { error: error.response?.data || error.message, sellBody }
         );
-        console.error('Prokip sell failed:', error.response?.data || error.message);
+        return;
       }
     }
   } 
