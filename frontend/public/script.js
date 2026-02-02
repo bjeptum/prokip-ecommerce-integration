@@ -21,11 +21,11 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // If returning from OAuth, check for existing session
   if (hasOAuthParams) {
-    const savedProkipToken = localStorage.getItem('prokipToken');
+    const savedProkipToken = localStorage.getItem('prokipToken') || localStorage.getItem('token');
     if (savedProkipToken) {
       prokipToken = savedProkipToken;
-      prokipRefreshToken = localStorage.getItem('prokipRefreshToken');
       token = prokipToken; // Set token for API calls
+      prokipRefreshToken = localStorage.getItem('prokipRefreshToken');
       currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
       currentBusinessLocation = JSON.parse(localStorage.getItem('businessLocation') || 'null');
       handleOAuthCallback();
@@ -39,13 +39,13 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   
   // Check for existing Prokip session
-  const savedProkipToken = localStorage.getItem('prokipToken');
+  const savedProkipToken = localStorage.getItem('prokipToken') || localStorage.getItem('token');
   const savedLocation = localStorage.getItem('businessLocation');
   
   if (savedProkipToken && savedLocation) {
     prokipToken = savedProkipToken;
-    prokipRefreshToken = localStorage.getItem('prokipRefreshToken');
     token = prokipToken; // Set token for API calls
+    prokipRefreshToken = localStorage.getItem('prokipRefreshToken');
     currentBusinessLocation = JSON.parse(savedLocation);
     currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
     showDashboard();
@@ -258,26 +258,33 @@ async function loginToProkip() {
     const data = await res.json();
     console.log('📦 Response data:', data);
 
-    if (res.ok && data.access_token) {
+    if (res.ok && (data.access_token || data.token)) {
       console.log('✅ Prokip login successful!');
       
-      // Store Prokip tokens
-      prokipToken = data.access_token;
+      // Store Prokip tokens (handle both old OAuth and new response formats)
+      prokipToken = data.access_token || data.token;
+      token = prokipToken; // Set the main token variable for apiCall function
       prokipRefreshToken = data.refresh_token;
       prokipExpiresIn = data.expires_in;
-      currentUser = { username };
+      currentUser = data.user || { username };
       
       localStorage.setItem('prokipToken', prokipToken);
+      localStorage.setItem('token', token); // Also store as 'token' for consistency
       localStorage.setItem('prokipRefreshToken', prokipRefreshToken || '');
       localStorage.setItem('currentUser', JSON.stringify(currentUser));
       
       // Store locations received from API
       if (data.locations && data.locations.length > 0) {
         businessLocations = data.locations;
+        console.log('📍 Real business locations loaded:', businessLocations.length);
+        businessLocations.forEach((location, index) => {
+          console.log(`  ${index + 1}. ${location.name || location.id} (ID: ${location.id})`);
+        });
         showBusinessLocationSelection();
       } else {
         // No locations returned, show error
-        document.getElementById('login-error').textContent = 'No business locations found for this account';
+        console.log('⚠️ No business locations found');
+        document.getElementById('login-error').textContent = 'No business locations found for this account. Please contact support.';
       }
     } else {
       console.log('❌ Login failed:', data.error);
@@ -467,6 +474,7 @@ async function logoutFromProkip() {
   businessLocations = [];
   
   localStorage.removeItem('authToken');
+  localStorage.removeItem('token');
   localStorage.removeItem('prokipToken');
   localStorage.removeItem('prokipRefreshToken');
   localStorage.removeItem('businessLocation');

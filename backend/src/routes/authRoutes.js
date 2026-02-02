@@ -80,8 +80,8 @@ router.post('/login', [
 });
 
 /**
- * Prokip Login - Authenticate user with Prokip API
- * This endpoint gets an access token from Prokip using user credentials
+ * Prokip Login - Authenticate user with Prokip OAuth API
+ * This endpoint gets an access token from Prokip using user credentials and loads real business locations
  */
 router.post('/prokip-login', [
   body('username').notEmpty().withMessage('Email is required'),
@@ -98,45 +98,105 @@ router.post('/prokip-login', [
   const { username, password, locationId } = req.body;
 
   try {
-    // Authenticate with Prokip API
+    console.log('🔐 Prokip OAuth login attempt started...');
+    console.log('📧 Username:', username);
+    console.log('🔑 Password provided:', password ? '✅ Yes' : '❌ No');
+
+    // Authenticate with Prokip OAuth API (real method)
     const tokenData = await prokipService.authenticateUser(username, password);
     
     const { access_token, refresh_token, expires_in } = tokenData;
 
-    // Get business locations for this user
-    const locations = await prokipService.getBusinessLocations(access_token);
+    console.log('✅ Prokip OAuth authentication successful!');
+    console.log('📦 Access token received:', access_token ? 'present' : 'missing');
 
-    // If locationId is provided, save the config immediately
-    if (locationId) {
-      await prokipService.saveProkipConfig({
-        access_token,
-        refresh_token,
-        expires_in,
-        locationId
+    // Get real business locations using the OAuth token
+    const locations = await prokipService.getBusinessLocations(access_token);
+    
+    console.log('📍 Real business locations loaded:', locations.length);
+    locations.forEach((location, index) => {
+      console.log(`  ${index + 1}. ${location.name || location.id} (ID: ${location.id})`);
+    });
+
+    // Create or find user in our system
+    let user = await prisma.user.findUnique({
+      where: { username }
+    });
+    
+    if (!user) {
+      // Create a new user if doesn't exist
+      const hashedPassword = await bcrypt.hash(password, 10);
+      user = await prisma.user.create({
+        data: {
+          username,
+          password: hashedPassword
+        }
       });
+      console.log('✅ Created new user:', username);
     }
+
+    // Store Prokip config using OAuth token
+    await prisma.prokipConfig.upsert({
+      where: { userId: user.id },
+      update: {
+        token: access_token,
+        refreshToken: refresh_token,
+        expiresAt: new Date(Date.now() + (expires_in * 1000)),
+        apiUrl: process.env.PROKIP_API,
+        locationId: locationId || (locations.length > 0 ? locations[0].id.toString() : '1')
+      },
+      create: {
+        userId: user.id,
+        token: access_token,
+        refreshToken: refresh_token,
+        expiresAt: new Date(Date.now() + (expires_in * 1000)),
+        apiUrl: process.env.PROKIP_API,
+        locationId: locationId || (locations.length > 0 ? locations[0].id.toString() : '1')
+      }
+    });
+
+    // Generate JWT token for our system
+    const jwtToken = jwt.sign(
+      { 
+        id: user.id, 
+        username: user.username,
+        prokipConnectionId: user.id
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
 
     res.json({ 
       success: true,
-      access_token, 
-      refresh_token,
-      expires_in,
-      locations,
-      message: 'Login successful' 
+      message: 'Login successful',
+      token: jwtToken,
+      access_token: access_token, // OAuth token for frontend
+      refresh_token: refresh_token,
+      expires_in: expires_in,
+      user: {
+        id: user.id,
+        username: user.username
+      },
+      locations: locations, // Real business locations only
+      prokipConnection: {
+        connectionId: user.id,
+        user: user,
+        tokenType: 'oauth',
+        expiresAt: new Date(Date.now() + (expires_in * 1000))
+      }
     });
+
   } catch (error) {
-    console.error('❌ Prokip login error in auth route:');
+    console.error('❌ Prokip OAuth login error in auth route:');
     console.error('   Error message:', error.message);
     console.error('   Error response:', error.response?.data);
     console.error('   Error status:', error.response?.status);
     console.error('   Error code:', error.code);
     
-    // Send detailed error response to client
     res.status(400).json({ 
-      error: error.message || 'Login failed. Please check your email and password.',
-      details: error.response?.data || 'Unknown error',
-      status: error.response?.status,
-      code: error.code
+      error: error.message || 'Invalid Prokip credentials. Please check your email and password.',
+      message: error.message,
+      details: error.response?.data || null
     });
   }
 });

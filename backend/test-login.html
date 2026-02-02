@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Prokip Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 400px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .error {
+            color: red;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #ffebee;
+            border-radius: 4px;
+        }
+        .success {
+            color: green;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #e8f5e8;
+            border-radius: 4px;
+        }
+        .debug {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Test Prokip Login</h2>
+    <p>This page tests the authentication directly without caching issues.</p>
+    
+    <form id="loginForm">
+        <div class="form-group">
+            <label for="username">Username:</label>
+            <input type="text" id="username" name="username" value="kenditrades" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required>
+        </div>
+        
+        <button type="submit">Login to Prokip</button>
+    </form>
+    
+    <div id="result"></div>
+    <div id="debug"></div>
+    
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const resultDiv = document.getElementById('result');
+            const debugDiv = document.getElementById('debug');
+            
+            resultDiv.innerHTML = '';
+            debugDiv.innerHTML = '';
+            
+            try {
+                console.log('🔐 Starting login test...');
+                console.log('📧 Username:', username);
+                console.log('🔑 Password provided:', !!password);
+                
+                const response = await fetch('http://localhost:3000/auth/prokip-login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    })
+                });
+                
+                console.log('📡 Response status:', response.status);
+                
+                const data = await response.json();
+                console.log('📦 Response data:', data);
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = '<div class="success">✅ Login successful!</div>';
+                    resultDiv.innerHTML += '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                } else {
+                    resultDiv.innerHTML = '<div class="error">❌ Login failed: ' + data.error + '</div>';
+                }
+                
+                debugDiv.innerHTML = '<div class="debug"><strong>Debug Info:</strong><br>';
+                debugDiv.innerHTML += 'Status: ' + response.status + '<br>';
+                debugDiv.innerHTML += 'Status Text: ' + response.statusText + '<br>';
+                debugDiv.innerHTML += 'Response: ' + JSON.stringify(data, null, 2) + '</div>';
+                
+            } catch (error) {
+                console.error('❌ Error:', error);
+                resultDiv.innerHTML = '<div class="error">❌ Network error: ' + error.message + '</div>';
+            }
+        });
+    </script>
+</body>
+</html>

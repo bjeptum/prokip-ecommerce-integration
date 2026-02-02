@@ -12,6 +12,7 @@ const wooConnectionRoutes = require('./routes/wooConnectionRoutes');
 const storeRoutes = require('./routes/storeRoutes');
 const syncRoutes = require('./routes/syncRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
+const wooInventoryWebhookRoutes = require('./routes/wooInventoryWebhookRoutes');
 const prokipRoutes = require('./routes/prokipRoutes');
 const setupRoutes = require('./routes/setupRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
@@ -141,6 +142,7 @@ app.use('/woo-connections', wooConnectionRoutes);
 app.use('/stores', storeRoutes);
 app.use('/sync', syncRoutes);
 app.use('/webhooks', webhookRoutes);
+app.use('/webhooks/woocommerce', wooInventoryWebhookRoutes);
 app.use('/connections/webhook', webhookRoutes); // Add route for ngrok webhook URL
 app.use('/prokip', prokipRoutes);
 app.use('/setup', setupRoutes);

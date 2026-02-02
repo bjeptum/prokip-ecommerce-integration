@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Prokip Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .error {
+            color: red;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #ffebee;
+            border-radius: 4px;
+        }
+        .success {
+            color: green;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #e8f5e8;
+            border-radius: 4px;
+        }
+        .debug {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #e3f2fd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h2>🔍 Debug Prokip Login</h2>
+    <p>This page will show exactly what's happening with the authentication.</p>
+    
+    <div class="status" id="status">
+        Checking server status...
+    </div>
+    
+    <form id="loginForm">
+        <div class="form-group">
+            <label for="username">Username:</label>
+            <input type="text" id="username" name="username" value="kenditrades" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required>
+        </div>
+        
+        <button type="submit">Test Login</button>
+    </form>
+    
+    <div id="result"></div>
+    <div id="debug"></div>
+    
+    <script>
+        // Check server status first
+        async function checkServerStatus() {
+            const statusDiv = document.getElementById('status');
+            
+            try {
+                const response = await fetch('http://localhost:3000/health');
+                const data = await response.json();
+                
+                statusDiv.innerHTML = '✅ Server is running: ' + JSON.stringify(data);
+                statusDiv.style.backgroundColor = '#e8f5e8';
+            } catch (error) {
+                statusDiv.innerHTML = '❌ Server error: ' + error.message;
+                statusDiv.style.backgroundColor = '#ffebee';
+            }
+        }
+        
+        document.getElementById('loginForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const resultDiv = document.getElementById('result');
+            const debugDiv = document.getElementById('debug');
+            
+            resultDiv.innerHTML = '';
+            debugDiv.innerHTML = '';
+            
+            try {
+                console.log('🔐 Starting debug login test...');
+                console.log('📧 Username:', username);
+                console.log('🔑 Password provided:', !!password);
+                
+                // Create unique request to prevent any caching
+                const timestamp = Date.now();
+                const random = Math.random().toString(36).substring(7);
+                const url = `http://localhost:3000/auth/prokip-login?t=${timestamp}&r=${random}`;
+                
+                console.log('🌐 Request URL:', url);
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache',
+                        'Expires': '0'
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    })
+                });
+                
+                console.log('📡 Response status:', response.status);
+                console.log('📡 Response status text:', response.statusText);
+                console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+                
+                const data = await response.json();
+                console.log('📦 Response data:', data);
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = '<div class="success">✅ Login successful!</div>';
+                    resultDiv.innerHTML += '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                } else {
+                    resultDiv.innerHTML = '<div class="error">❌ Login failed: ' + data.error + '</div>';
+                    resultDiv.innerHTML += '<div class="error">Status: ' + response.status + ' ' + response.statusText + '</div>';
+                }
+                
+                debugDiv.innerHTML = '<div class="debug"><strong>Complete Debug Info:</strong><br>';
+                debugDiv.innerHTML += 'Request URL: ' + url + '<br>';
+                debugDiv.innerHTML += 'Request Method: POST<br>';
+                debugDiv.innerHTML += 'Request Headers: Content-Type: application/json, Cache-Control: no-cache<br>';
+                debugDiv.innerHTML += 'Request Body: ' + JSON.stringify({ username, password }) + '<br><br>';
+                debugDiv.innerHTML += 'Response Status: ' + response.status + ' ' + response.statusText + '<br>';
+                debugDiv.innerHTML += 'Response Headers: ' + JSON.stringify(Object.fromEntries(response.headers.entries()), null, 2) + '<br><br>';
+                debugDiv.innerHTML += 'Response Body: ' + JSON.stringify(data, null, 2) + '</div>';
+                
+            } catch (error) {
+                console.error('❌ Error:', error);
+                resultDiv.innerHTML = '<div class="error">❌ Network error: ' + error.message + '</div>';
+                
+                debugDiv.innerHTML = '<div class="debug"><strong>Error Details:</strong><br>';
+                debugDiv.innerHTML += 'Error: ' + error.message + '<br>';
+                debugDiv.innerHTML += 'Stack: ' + error.stack + '</div>';
+            }
+        });
+        
+        // Check status on page load
+        checkServerStatus();
+    </script>
+</body>
+</html>

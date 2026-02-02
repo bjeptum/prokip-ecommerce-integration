@@ -1,0 +1,183 @@
+// Prisma Schema for Per-User WooCommerce → Prokip Integration
+// This schema handles secure storage of user tokens and connections
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // or "mysql", "sqlite" based on your setup
+  url      = env("DATABASE_URL")
+}
+
+// User connections to Prokip (stores encrypted JWT tokens)
+model ProkipConnection {
+  id                String   @id @default(cuid())
+  userId            String   // Your system's user ID
+  prokipUserId      String   // Prokip's user/customer ID
+  prokipEmail       String   // User's Prokip login email
+  encryptedToken    String   // Encrypted JWT token
+  tokenExpiresAt    DateTime // When the token expires
+  connectionName    String?  // User-friendly name for the connection
+  isActive          Boolean  @default(true) // Whether the connection is active
+  lastSyncAt        DateTime @default(now()) // Last successful sync
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  stockTransactions StockTransaction[] // User's stock transactions
+  webhookLogs       WebhookLog[]       // User's webhook logs
+
+  // Indexes for performance
+  @@index([userId])
+  @@index([prokipUserId])
+  @@index([isActive])
+  @@index([tokenExpiresAt])
+  @@unique([userId, isActive]) // Only one active connection per user
+}
+
+// Stock transactions for tracking WooCommerce → Prokip stock deductions
+model StockTransaction {
+  id              String   @id @default(cuid())
+  userId          String   // Your system's user ID
+  connectionId    String   // Link to ProkipConnection
+  wooOrderId      String   // WooCommerce order ID
+  wooOrderNumber  String?  // WooCommerce order number
+  transactionId   String?  // Prokip transaction ID
+  receiptNumber   String?  // Prokip receipt number
+  
+  // Order details
+  customerInfo    Json?    // Customer information from WooCommerce
+  products        Json     // Products ordered (Laravel format)
+  totalAmount     Decimal  @db.Decimal(10, 2)
+  
+  // Stock details
+  stockBefore     Json?    // Stock levels before deduction
+  stockAfter      Json?    // Stock levels after deduction
+  itemsDeducted   Json?    // Details of items deducted
+  
+  // Status and tracking
+  status          String   // pending, processing, completed, failed, retry
+  errorMessage    String?  // Error message if failed
+  retryCount      Int      @default(0)
+  maxRetries      Int      @default(3)
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  processedAt     DateTime? // When successfully processed
+
+  // Relations
+  connection      ProkipConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  // Indexes for performance
+  @@index([userId])
+  @@index([connectionId])
+  @@index([wooOrderId])
+  @@index([status])
+  @@index([createdAt])
+  @@unique([wooOrderId, connectionId]) // Prevent duplicate orders per connection
+}
+
+// Webhook logs for debugging and monitoring
+model WebhookLog {
+  id            String   @id @default(cuid())
+  userId        String   // Your system's user ID
+  connectionId  String   // Link to ProkipConnection
+  webhookType   String   // order.created, order.updated, etc.
+  wooOrderId    String?  // WooCommerce order ID from webhook
+  payload       Json     // Full webhook payload
+  processed     Boolean  @default(false)
+  success       Boolean? // null if not processed yet
+  errorMessage  String?  // Error message if processing failed
+  processingTime Int?    // Processing time in milliseconds
+  createdAt     DateTime @default(now())
+
+  // Relations
+  connection     ProkipConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  // Indexes for performance
+  @@index([userId])
+  @@index([connectionId])
+  @@index([webhookType])
+  @@index([wooOrderId])
+  @@index([processed])
+  @@index([createdAt])
+}
+
+// User settings for WooCommerce → Prokip integration
+model UserIntegrationSettings {
+  id                    String   @id @default(cuid())
+  userId                String   // Your system's user ID
+  autoSyncEnabled       Boolean  @default(true)
+  stockCheckEnabled     Boolean  @default(true)
+  webhookSecret         String?  // WooCommerce webhook secret
+  defaultLocationId     String?  // Default Prokip location ID
+  lowStockThreshold     Int      @default(5)
+  enableNotifications   Boolean  @default(true)
+  notificationEmail     String?
+  
+  // SKU mapping settings
+  skuMapping            Json?    // Custom SKU to variation_id mappings
+  autoCreateCustomers   Boolean  @default(true)
+  
+  // Retry settings
+  maxRetries            Int      @default(3)
+  retryDelaySeconds     Int      @default(60)
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Indexes
+  @@index([userId])
+  @@unique([userId])
+}
+
+// Failed sync attempts for manual review
+model FailedSync {
+  id              String   @id @default(cuid())
+  userId          String   // Your system's user ID
+  connectionId    String?  // Link to ProkipConnection if available
+  wooOrderId      String   // WooCommerce order ID
+  payload         Json     // Original order payload
+  errorType       String   // authentication, stock, validation, network
+  errorMessage    String   // Detailed error message
+  retryCount      Int      @default(0)
+  nextRetryAt     DateTime?
+  resolved        Boolean  @default(false)
+  resolvedAt      DateTime?
+  resolutionNote  String?  // How it was resolved
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Indexes
+  @@index([userId])
+  @@index([connectionId])
+  @@index([wooOrderId])
+  @@index([errorType])
+  @@index([resolved])
+  @@index([nextRetryAt])
+}
+
+// API usage tracking for monitoring and billing
+model ApiUsage {
+  id            String   @id @default(cuid())
+  userId        String   // Your system's user ID
+  connectionId  String   // Link to ProkipConnection
+  endpoint      String   // API endpoint called
+  method        String   // HTTP method
+  statusCode    Int      // Response status code
+  responseTime  Int      // Response time in milliseconds
+  success       Boolean  // Whether the call was successful
+  errorMessage  String?  // Error message if failed
+  
+  createdAt     DateTime @default(now())
+
+  // Indexes
+  @@index([userId])
+  @@index([connectionId])
+  @@index([endpoint])
+  @@index([statusCode])
+  @@index([createdAt])
+}
