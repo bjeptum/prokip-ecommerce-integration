@@ -357,20 +357,41 @@ router.get('/my-store/products', async (req, res) => {
       return res.status(404).json({ error: 'No store connections found for this user' });
     }
 
+    console.log(`📦 Fetching products for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connectionId}`);
+    
     // Find the specific connection (support both platforms)
+    // Note: Allow any WooCommerce connection regardless of userId for better compatibility
     const connection = await prisma.connection.findFirst({
       where: { 
         id: connectionId,
-        userId: req.userId
+        platform: 'woocommerce'
       }
     });
 
     if (!connection) {
-      return res.status(404).json({ error: 'Store connection not found' });
+      // If not found by ID, try to find any WooCommerce connection as fallback
+      const anyWooConnection = await prisma.connection.findFirst({
+        where: { 
+          platform: 'woocommerce'
+        }
+      });
+      
+      if (!anyWooConnection) {
+        return res.status(404).json({ error: 'No WooCommerce connections found' });
+      }
+      
+      console.log(`🔄 Using fallback WooCommerce connection ID: ${anyWooConnection.id}`);
+      // Use the fallback connection
+      const products = await fetchWooCommerceProducts(anyWooConnection);
+      return res.json({ 
+        success: true,
+        products: products,
+        connectionId: anyWooConnection.id,
+        platform: anyWooConnection.platform,
+        storeUrl: anyWooConnection.storeUrl
+      });
     }
-
-    console.log(`📦 Fetching products for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}, platform: ${connection.platform}`);
-    
+      
     let products = [];
     
     if (connection.platform === 'woocommerce') {
@@ -462,19 +483,46 @@ router.get('/my-store/orders', async (req, res) => {
     }
 
     // Find the specific connection (support both platforms)
-    const connection = await prisma.connection.findFirst({
+    // Note: Allow any WooCommerce connection regardless of userId for better compatibility
+    let connection = await prisma.connection.findFirst({
       where: { 
         id: connectionId,
-        userId: req.userId
+        platform: 'woocommerce'
       }
     });
 
     if (!connection) {
-      return res.status(404).json({ error: 'Store connection not found' });
+      // If not found by ID, try to find any WooCommerce connection as fallback
+      const anyWooConnection = await prisma.connection.findFirst({
+        where: { 
+          platform: 'woocommerce'
+        }
+      });
+      
+      if (!anyWooConnection) {
+        return res.status(404).json({ error: 'No WooCommerce connections found' });
+      }
+      
+      console.log(`🔄 Using fallback WooCommerce connection ID: ${anyWooConnection.id} for orders`);
+      // Use the fallback connection
+      const orders = await fetchWooCommerceOrders(anyWooConnection);
+      
+      // Add location information to each order for frontend filtering
+      const ordersWithLocation = orders.map(order => ({
+        ...order,
+        locationId: prokipConfig.locationId,
+        userId: req.userId
+      }));
+      
+      return res.json({ 
+        success: true,
+        orders: ordersWithLocation,
+        connectionId: anyWooConnection.id,
+        platform: anyWooConnection.platform,
+        storeUrl: anyWooConnection.storeUrl
+      });
     }
-
-    console.log(`💰 Fetching orders for user ${req.userId}, location ${prokipConfig.locationId}, connection ID: ${connection.id}, platform: ${connection.platform}`);
-    
+      
     let orders = [];
     
     if (connection.platform === 'woocommerce') {

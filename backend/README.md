@@ -195,3 +195,4 @@ Import `tests/Postman-Collection.json` for API testing.
 2. Configure production database URL
 3. Set up HTTPS (required for Shopify OAuth)
 4. Configure production webhook URLs
+

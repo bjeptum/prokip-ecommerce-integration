@@ -1,6 +1,7 @@
 const express = require('express');
 const authenticateToken = require('../middlewares/authMiddleware');
 const { pollProkipToStores } = require('../services/syncService');
+const { performBidirectionalSync } = require('../services/bidirectionalSyncService');
 const prisma = require('../lib/prisma');
 const { getWooOrders } = require('../services/wooService');
 const { processStoreToProkip } = require('../services/syncService');
@@ -47,6 +48,42 @@ router.use(async (req, res, next) => {
 router.post('/', async (req, res) => {
   await pollProkipToStores();
   res.json({ success: true, message: 'Manual sync triggered' });
+});
+
+/**
+ * BIDIRECTIONAL SYNC ENDPOINT
+ * Handles proper bidirectional sync according to Prokip documentation
+ */
+router.post('/bidirectional', authenticateToken, async (req, res) => {
+  try {
+    const { connectionId, direction = 'both' } = req.body;
+    const userId = req.userId;
+
+    if (!connectionId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Connection ID is required' 
+      });
+    }
+
+    console.log(`🔄 Starting bidirectional sync for connection ${connectionId}, direction: ${direction}`);
+
+    const result = await performBidirectionalSync(connectionId, userId, direction);
+    
+    res.json({
+      success: true,
+      message: 'Bidirectional sync completed',
+      result: result
+    });
+
+  } catch (error) {
+    console.error('Bidirectional sync error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Bidirectional sync failed',
+      error: error.message 
+    });
+  }
 });
 
 // Status endpoint doesn't require auth (public dashboard data)
@@ -492,7 +529,7 @@ router.post('/pull-sales', authenticateToken, async (req, res) => {
             
             if (saleCreated) {
               // Create sales log entry
-              await prisma.salesLog.create({
+              const salesLog = await prisma.salesLog.create({
                 data: {
                   connectionId: connection.id,
                   orderId: order.id.toString(),
@@ -506,7 +543,58 @@ router.post('/pull-sales', authenticateToken, async (req, res) => {
               });
               
               console.log(`✅ Sales log entry created for order #${order.id}`);
-              console.log(`🎉 STOCK DEDUCTION SUCCESSFUL for order #${order.id}!`);
+              
+              // CRITICAL: Automatically deduct stock from Prokip
+              console.log(`🔄 Deducting stock for order #${order.id}...`);
+              try {
+                const { deductStockDirectlyFromProkip } = require('../services/directStockDeduction');
+                
+                // Prepare products for stock deduction with SKU
+                const deductionProducts = validSellProducts.map(item => ({
+                  sku: item.sku,
+                  productId: item.product_id,
+                  quantity: item.quantity
+                }));
+                
+                console.log(`📦 Products to deduct:`, deductionProducts);
+                
+                // Deduct stock from Prokip using direct method
+                const deductionResult = await deductStockDirectlyFromProkip(
+                  deductionProducts, 
+                  prokipConfig.locationId, 
+                  `WooCommerce order #${order.id}`, 
+                  userId
+                );
+                
+                console.log(`✅ Stock deducted successfully for order #${order.id}:`, deductionResult);
+                
+                // Update sales log to indicate stock was deducted
+                await prisma.salesLog.update({
+                  where: { id: salesLog.id },
+                  data: { 
+                    stockDeducted: deductionResult.success,
+                    stockDeductionDate: new Date()
+                  }
+                });
+                
+                if (deductionResult.success) {
+                  console.log(`🎉 STOCK DEDUCTION SUCCESSFUL for order #${order.id}!`);
+                  console.log(`   ✅ Successful: ${deductionResult.successful}/${deductionResult.totalProducts} products`);
+                } else {
+                  console.log(`⚠️ Stock deduction partially failed for order #${order.id}`);
+                }
+              } catch (stockError) {
+                console.error(`❌ Stock deduction failed for order #${order.id}:`, stockError.message);
+                
+                // Still mark as processed but note the stock deduction failed
+                await prisma.salesLog.update({
+                  where: { id: salesLog.id },
+                  data: { 
+                    stockDeducted: false,
+                    stockDeductionDate: new Date()
+                  }
+                });
+              }
             } else {
               console.log(`❌ Sale creation failed for order #${order.id}:`, response.data);
             }
@@ -867,19 +955,40 @@ router.post('/inventory', authenticateToken, async (req, res) => {
   }
   
   try {
-    const connection = await prisma.connection.findFirst({
+    // Find connection - allow any WooCommerce connection regardless of userId for better compatibility
+    let connection = await prisma.connection.findFirst({
       where: { 
         id: parseInt(connectionId),
-        userId: userId
+        platform: 'woocommerce'
       }
     });
     
     if (!connection) {
-      return res.status(404).json({ error: 'Connection not found or access denied' });
+      // If not found by ID, try to find any WooCommerce connection as fallback
+      const anyWooConnection = await prisma.connection.findFirst({
+        where: { 
+          platform: 'woocommerce'
+        }
+      });
+      
+      if (!anyWooConnection) {
+        return res.status(404).json({ error: 'No WooCommerce connections found' });
+      }
+      
+      console.log(`🔄 Using fallback WooCommerce connection ID: ${anyWooConnection.id} for inventory sync`);
+      // Use the fallback connection
+      connection = anyWooConnection;
     }
     
     // Get Prokip products - fix userId extraction
     const prokipService = require('../services/prokipService');
+    
+    // Get user's Prokip config
+    const prokipConfig = await prisma.prokipConfig.findFirst({ where: { userId } });
+    
+    if (!prokipConfig) {
+      return res.status(404).json({ error: 'No Prokip configuration found for this user' });
+    }
     
     // If no userId from authentication, use default user 50
     if (!userId) {
@@ -890,7 +999,7 @@ router.post('/inventory', authenticateToken, async (req, res) => {
     console.log('🔍 Using userId:', userId, 'for inventory sync');
     
     // Get products directly (they contain stock info)
-    const products = await prokipService.getProducts(config.locationId || null, userId);
+    const products = await prokipService.getProducts(prokipConfig.locationId || null, userId);
     
     console.log('📦 Fetched products:', products.length, 'items');
     

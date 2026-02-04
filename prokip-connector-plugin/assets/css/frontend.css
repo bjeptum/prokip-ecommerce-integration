@@ -1,0 +1,538 @@
+/**
+ * Prokip E-commerce Integration - Frontend Styles
+ */
+
+/* Product Data Display */
+.prokip-product-data {
+    background: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 15px;
+    margin: 10px 0;
+}
+
+.prokip-product-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.prokip-product-name {
+    font-weight: bold;
+    font-size: 16px;
+    color: #23282d;
+}
+
+.prokip-product-sku {
+    color: #666;
+    font-size: 14px;
+}
+
+.prokip-product-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
+.prokip-detail-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.prokip-detail-label {
+    font-size: 12px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 5px;
+}
+
+.prokip-detail-value {
+    font-size: 14px;
+    color: #23282d;
+    font-weight: 600;
+}
+
+/* Stock Levels */
+.prokip-stock-level {
+    font-weight: bold;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.prokip-stock-level.in-stock {
+    background: #46b450;
+    color: white;
+}
+
+.prokip-stock-level.low-stock {
+    background: #ffb900;
+    color: #23282d;
+}
+
+.prokip-stock-level.out-of-stock {
+    background: #dc3232;
+    color: white;
+}
+
+/* Prices */
+.prokip-price {
+    font-size: 18px;
+    font-weight: bold;
+    color: #23282d;
+}
+
+.prokip-price.sale {
+    color: #46b450;
+}
+
+.prokip-price.original {
+    text-decoration: line-through;
+    color: #666;
+    font-size: 14px;
+    margin-left: 5px;
+}
+
+/* Sync Button */
+.prokip-sync-product {
+    background: #0073aa;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    transition: background-color 0.2s ease;
+}
+
+.prokip-sync-product:hover {
+    background: #005a87;
+}
+
+.prokip-sync-product:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+/* Stock Alert */
+.prokip-stock-alert {
+    background: #ffb900;
+    color: #23282d;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 5px;
+}
+
+.prokip-stock-alert:hover {
+    background: #e6a800;
+}
+
+/* Last Sync Info */
+.prokip-last-sync {
+    font-size: 11px;
+    color: #666;
+    font-style: italic;
+}
+
+/* Notifications */
+.prokip-notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 15px 20px;
+    border-radius: 4px;
+    color: white;
+    font-size: 14px;
+    z-index: 999999;
+    max-width: 300px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    animation: slideIn 0.3s ease;
+}
+
+.prokip-notification.prokip-success {
+    background: #46b450;
+}
+
+.prokip-notification.prokip-error {
+    background: #dc3232;
+}
+
+.prokip-notification.prokip-info {
+    background: #0073aa;
+}
+
+.prokip-notification.prokip-warning {
+    background: #ffb900;
+    color: #23282d;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Loading State */
+.prokip-loading {
+    position: relative;
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.prokip-loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #0073aa;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Product Grid */
+.prokip-product-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.prokip-product-card {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.prokip-product-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.prokip-product-image {
+    width: 100%;
+    height: 200px;
+    object-fit: cover;
+    background: #f9f9f9;
+}
+
+.prokip-product-info {
+    padding: 15px;
+}
+
+.prokip-product-title {
+    font-size: 16px;
+    font-weight: bold;
+    color: #23282d;
+    margin: 0 0 10px 0;
+    line-height: 1.3;
+}
+
+.prokip-product-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.prokip-product-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 15px;
+}
+
+.prokip-product-actions .button {
+    flex: 1;
+    text-align: center;
+    padding: 8px 12px;
+    font-size: 12px;
+}
+
+/* Stock Badge */
+.prokip-stock-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.prokip-stock-badge.in-stock {
+    background: #e7f3e9;
+    color: #46b450;
+}
+
+.prokip-stock-badge.low-stock {
+    background: #fcf9e8;
+    color: #e6a800;
+}
+
+.prokip-stock-badge.out-of-stock {
+    background: #fef7f7;
+    color: #dc3232;
+}
+
+/* Sync Status */
+.prokip-sync-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: #666;
+}
+
+.prokip-sync-status.syncing {
+    color: #0073aa;
+}
+
+.prokip-sync-status.success {
+    color: #46b450;
+}
+
+.prokip-sync-status.error {
+    color: #dc3232;
+}
+
+.prokip-sync-status::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.prokip-sync-status.syncing::before {
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Quick View Modal */
+.prokip-quick-view {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 999999;
+}
+
+.prokip-quick-view-content {
+    background: white;
+    border-radius: 8px;
+    max-width: 600px;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 20px;
+    position: relative;
+}
+
+.prokip-quick-view-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #666;
+}
+
+.prokip-quick-view-close:hover {
+    color: #23282d;
+}
+
+/* Responsive Design */
+@media screen and (max-width: 768px) {
+    .prokip-product-grid {
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 15px;
+    }
+    
+    .prokip-product-details {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+    
+    .prokip-product-meta {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 5px;
+    }
+    
+    .prokip-product-actions {
+        flex-direction: column;
+    }
+    
+    .prokip-notification {
+        right: 10px;
+        left: 10px;
+        max-width: none;
+    }
+    
+    .prokip-quick-view-content {
+        margin: 10px;
+        max-height: 90vh;
+    }
+}
+
+@media screen and (max-width: 480px) {
+    .prokip-product-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .prokip-product-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 5px;
+    }
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+    .prokip-product-data {
+        background: #2d2d2d;
+        border-color: #444;
+        color: #fff;
+    }
+    
+    .prokip-product-name {
+        color: #fff;
+    }
+    
+    .prokip-product-sku {
+        color: #ccc;
+    }
+    
+    .prokip-detail-label {
+        color: #aaa;
+    }
+    
+    .prokip-detail-value {
+        color: #fff;
+    }
+    
+    .prokip-price {
+        color: #fff;
+    }
+    
+    .prokip-product-card {
+        background: #2d2d2d;
+        border-color: #444;
+    }
+    
+    .prokip-product-title {
+        color: #fff;
+    }
+    
+    .prokip-stock-badge.in-stock {
+        background: #2d4a2e;
+        color: #7ad03a;
+    }
+    
+    .prokip-stock-badge.low-stock {
+        background: #4a4a2e;
+        color: #e6a800;
+    }
+    
+    .prokip-stock-badge.out-of-stock {
+        background: #4a2e2e;
+        color: #ff6b6b;
+    }
+    
+    .prokip-quick-view-content {
+        background: #2d2d2d;
+        color: #fff;
+    }
+    
+    .prokip-quick-view-close {
+        color: #ccc;
+    }
+    
+    .prokip-quick-view-close:hover {
+        color: #fff;
+    }
+}
+
+/* Accessibility */
+.prokip-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Focus Styles */
+.prokip-sync-product:focus,
+.prokip-stock-alert:focus,
+.prokip-quick-view-close:focus {
+    outline: 2px solid #0073aa;
+    outline-offset: 2px;
+}
+
+/* High Contrast Mode */
+@media (prefers-contrast: high) {
+    .prokip-product-data {
+        border: 2px solid #000;
+    }
+    
+    .prokip-stock-level {
+        border: 1px solid #000;
+    }
+    
+    .prokip-sync-product {
+        border: 2px solid #000;
+    }
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    .prokip-product-card,
+    .prokip-sync-product,
+    .prokip-notification,
+    .prokip-sync-status.syncing::before {
+        animation: none;
+        transition: none;
+    }
+}

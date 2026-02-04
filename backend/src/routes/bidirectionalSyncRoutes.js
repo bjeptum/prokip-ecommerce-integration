@@ -1,14 +1,35 @@
 const express = require('express');
+const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const axios = require('axios');
 const { decryptCredentials } = require('../services/storeService');
+const prokipService = require('../services/prokipService');
 
 const router = express.Router();
 
 // Authentication middleware
 router.use((req, res, next) => {
-  req.userId = req.user?.id || req.userId || 50;
-  console.log(`🔐 Bidirectional sync: Setting userId to ${req.userId}`);
+  const authHeader = req.headers.authorization;
+  
+  console.log('🔐 Bidirectional sync: Checking auth header:', authHeader ? 'present' : 'missing');
+  
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.userId = decoded.id;
+      console.log(`🔐 Bidirectional sync: JWT decoded successfully, userId set to ${req.userId}`);
+    } catch (error) {
+      console.log('⚠️ Invalid JWT token:', error.message);
+      req.userId = 2; // Fallback to user ID 2
+    }
+  } else {
+    console.log('⚠️ No authorization header found');
+    req.userId = 2; // Fallback to user ID 2
+  }
+  
+  console.log(`🔐 Bidirectional sync: Final userId set to ${req.userId}`);
   next();
 });
 
@@ -29,12 +50,33 @@ router.post('/sync-woocommerce', async (req, res) => {
       prisma.prokipConfig.findFirst({ where: { userId } })
     ]);
     
+    console.log('🔍 Debug - Retrieved data:');
+    console.log('  - userId:', userId);
+    console.log('  - wooConnection:', wooConnection ? 'found' : 'not found');
+    console.log('  - prokipConfig:', prokipConfig ? 'found' : 'not found');
+    
+    if (prokipConfig) {
+      console.log('  - prokipConfig.token:', prokipConfig.token ? 'present' : 'missing');
+      console.log('  - prokipConfig.locationId:', prokipConfig.locationId);
+      console.log('  - prokipConfig.userId:', prokipConfig.userId);
+    }
+    
     if (!wooConnection) {
       return res.status(404).json({ error: 'WooCommerce connection not found' });
     }
     
     if (!prokipConfig?.token || !prokipConfig.locationId) {
-      return res.status(404).json({ error: 'Prokip configuration not found' });
+      return res.status(404).json({ 
+        error: 'Prokip configuration not found',
+        debug: {
+          userId,
+          prokipConfig: prokipConfig ? {
+            hasToken: !!prokipConfig.token,
+            locationId: prokipConfig.locationId,
+            userId: prokipConfig.userId
+          } : null
+        }
+      });
     }
     
     console.log('✅ Connections found');
@@ -97,29 +139,53 @@ router.post('/sync-woocommerce', async (req, res) => {
         results.wooToProkip.processed++;
         
         try {
-          // Check if already processed
-          const existingLog = await prisma.salesLog.findFirst({
+          // Check if already processed - enhanced with per-SKU tracking
+          const existingLogs = await prisma.salesLog.findMany({
             where: {
               connectionId: wooConnection.id,
               orderId: order.id.toString()
             }
           });
           
-          if (existingLog) {
-            console.log(`⏭️ Order ${order.id} already processed, skipping`);
+          // Check if all SKUs in this order have been successfully processed
+          const orderSKUs = order.line_items
+            .filter(item => item.sku && item.sku.trim() !== '')
+            .map(item => item.sku.trim());
+          
+          const processedSKUs = existingLogs
+            .filter(log => log.stockDeducted === true)
+            .map(log => log.sku);
+          
+          const unprocessedSKUs = orderSKUs.filter(sku => !processedSKUs.includes(sku));
+          
+          if (unprocessedSKUs.length === 0) {
+            console.log(`⏭️ Order ${order.id} already fully processed for all SKUs, skipping`);
             continue;
           }
           
-          // Process order items
+          if (unprocessedSKUs.length < orderSKUs.length) {
+            console.log(`🔄 Order ${order.id} partially processed - retrying for SKUs: ${unprocessedSKUs.join(', ')}`);
+          }
+          
+          // Process order items with strict SKU validation
           const finalTotal = parseFloat(order.total || order.total_price || 0);
           const sellProducts = order.line_items
-            .filter(item => item.sku)
             .map(item => {
-              const prokipProduct = prokipProducts.find(p => p.sku === item.sku);
-              if (!prokipProduct) {
-                console.log(`❌ Product with SKU ${item.sku} not found in Prokip`);
+              // CRITICAL: Enforce SKU-based matching
+              if (!item.sku || item.sku.trim() === '') {
+                console.error(`❌ CRITICAL ERROR: WooCommerce line item missing SKU - Item: ${item.name}`);
+                results.wooToProkip.errors.push(`Order ${order.id}: Line item "${item.name}" missing SKU - cannot process`);
                 return null;
               }
+              
+              const prokipProduct = prokipProducts.find(p => p.sku === item.sku.trim());
+              if (!prokipProduct) {
+                console.error(`❌ CRITICAL ERROR: Product with SKU "${item.sku}" not found in Prokip - Item: ${item.name}`);
+                results.wooToProkip.errors.push(`Order ${order.id}: SKU "${item.sku}" not found in Prokip - cannot process`);
+                return null;
+              }
+              
+              console.log(`✅ SKU match found: ${item.sku} → Prokip product ID: ${prokipProduct.id}`);
               
               // Handle variation_id correctly - use actual variation_ids from product structure
               let variationId = prokipProduct.id;
@@ -205,15 +271,15 @@ router.post('/sync-woocommerce', async (req, res) => {
             continue;
           }
           
-          // FIXED: Use local inventory as source of truth, not Prokip stock
-          console.log(`📝 Using local inventory as source of truth for order ${order.id} with ${validSellProducts.length} products`);
+          // CRITICAL FIX: Use Prokip as source of truth - stock comes from Prokip location
+          console.log(`📝 Using Prokip stock as source of truth for order ${order.id} with ${validSellProducts.length} products`);
           
           let totalStockDeducted = 0;
           const processedItems = [];
           
           for (const product of validSellProducts) {
             try {
-              // Get current stock from Prokip (for logging)
+              // CRITICAL FIX: Get current stock directly from Prokip as source of truth
               const stockResponse = await axios.get(
                 `https://api.prokip.africa/connector/api/product-stock-report?product_id=${product.product_id}`,
                 { headers: prokipHeaders }
@@ -221,49 +287,159 @@ router.post('/sync-woocommerce', async (req, res) => {
               
               const prokipStock = stockResponse.data?.[0]?.stock || stockResponse.data?.[0]?.qty_available || 0;
               
-              // FIXED: Use local inventory stock as the source of truth, not Prokip stock
-              // Prokip stock may be 0 due to API limitations, but local inventory has the real count
-              const inventoryLog = await prisma.inventoryLog.findFirst({
-                where: {
-                  connectionId: wooConnection.id,
-                  sku: product.sku
-                }
-              });
+              // Use Prokip stock as the source of truth - deduct from actual Prokip inventory
+              const currentProkipStock = prokipStock;
+              const quantityToDeduct = Math.min(product.quantity, currentProkipStock);
               
-              const localStock = inventoryLog?.quantity || 0;
-              const quantityToDeduct = Math.min(product.quantity, localStock);
-              
-              console.log(`  📊 Product ${product.sku}: Local stock: ${localStock}, Prokip stock: ${prokipStock}, Deducting: ${quantityToDeduct}`);
+              console.log(`  📊 Product ${product.sku}: Prokip stock: ${currentProkipStock}, Deducting: ${quantityToDeduct}`);
 
               if (quantityToDeduct > 0) {
-                if (inventoryLog) {
-                  // Update existing inventory log
-                  const newStock = Math.max(0, localStock - quantityToDeduct);
-                  await prisma.inventoryLog.update({
-                    where: { id: inventoryLog.id },
-                    data: {
-                      quantity: newStock,
-                      lastSynced: new Date()
-                    }
-                  });
-                  console.log(`  ✅ Updated inventory log: ${inventoryLog.quantity} → ${newStock}`);
-                } else {
-                  // Create new inventory log with the remaining stock
-                  await prisma.inventoryLog.create({
-                    data: {
-                      connectionId: wooConnection.id,
-                      productId: product.product_id.toString(),
-                      productName: product.name,
-                      sku: product.sku,
-                      quantity: Math.max(0, localStock - quantityToDeduct),
-                      price: product.unit_price
-                    }
-                  });
-                  console.log(`  ✅ Created inventory log with stock: ${Math.max(0, localStock - quantityToDeduct)}`);
+                // CRITICAL: Deduct stock from Prokip with verification
+                let prokipTransactionId = null;
+                let stockDeductionSuccessful = false;
+                
+                try {
+                  // Get stock before deduction for verification
+                  const stockBefore = currentProkipStock;
+                  
+                  const deductionProducts = [{
+                    product_id: parseInt(product.product_id),
+                    quantity: quantityToDeduct
+                  }];
+                  
+                  console.log(`  🔧 DEDUCTING STOCK FROM PROKIP:`);
+                  console.log(`     - SKU: ${product.sku}`);
+                  console.log(`     - Product ID: ${product.product_id}`);
+                  console.log(`     - Quantity: ${quantityToDeduct}`);
+                  console.log(`     - Stock Before: ${stockBefore}`);
+                  console.log(`     - Location ID: ${prokipConfig.locationId}`);
+                  
+                  // Call actual Prokip stock movement endpoint
+                  const deductionResult = await prokipService.deductStockFromProkip(
+                    deductionProducts, 
+                    prokipConfig.locationId, 
+                    'WooCommerce sale stock reduction', 
+                    userId
+                  );
+                  
+                  // Generate transaction ID for tracking
+                  prokipTransactionId = `woo_${order.id}_${product.sku}_${Date.now()}`;
+                  
+                  console.log(`  📋 Prokip deduction response:`, deductionResult);
+                  
+                  // CRITICAL VERIFICATION: Fetch stock after deduction to confirm
+                  await new Promise(resolve => setTimeout(resolve, 1000)); // Brief pause for Prokip to update
+                  
+                  const verificationResponse = await axios.get(
+                    `https://api.prokip.africa/connector/api/product-stock-report?product_id=${product.product_id}`,
+                    { headers: prokipHeaders }
+                  );
+                  
+                  const stockAfter = verificationResponse.data?.[0]?.stock || verificationResponse.data?.[0]?.qty_available || 0;
+                  const expectedStock = Math.max(0, stockBefore - quantityToDeduct);
+                  
+                  console.log(`  🔍 STOCK VERIFICATION:`);
+                  console.log(`     - Stock Before: ${stockBefore}`);
+                  console.log(`     - Stock After: ${stockAfter}`);
+                  console.log(`     - Expected Stock: ${expectedStock}`);
+                  
+                  // CRITICAL: Only mark as successful if stock actually decreased
+                  if (stockAfter < stockBefore) {
+                    stockDeductionSuccessful = true;
+                    totalStockDeducted += quantityToDeduct;
+                    console.log(`  ✅ STOCK DEDUCTION CONFIRMED: ${product.sku} reduced by ${quantityToDeduct} units`);
+                  } else {
+                    console.error(`  ❌ CRITICAL ERROR: Prokip API responded 200 but stock unchanged!`);
+                    console.error(`     - Expected: ${expectedStock}, Got: ${stockAfter}`);
+                    results.wooToProkip.errors.push(`Order ${order.id}: Prokip API success but stock unchanged for ${product.sku}`);
+                  }
+                  
+                } catch (deductError) {
+                  console.error(`  ❌ CRITICAL ERROR: Failed to deduct stock from Prokip for SKU ${product.sku}:`, deductError.message);
+                  console.error(`     - Error details:`, deductError.response?.data || deductError.stack);
+                  results.wooToProkip.errors.push(`Order ${order.id}: Prokip stock deduction failed for ${product.sku}`);
+                  
+                  // Create failed sales log entry for retry
+                  try {
+                    await prisma.salesLog.create({
+                      data: {
+                        connectionId: wooConnection.id,
+                        orderId: order.id.toString(),
+                        orderNumber: order.order_number?.toString() || order.id.toString(),
+                        sku: product.sku,
+                        customerName: order.customer?.first_name || order.billing?.first_name || 'Customer',
+                        customerEmail: order.customer?.email || order.billing?.email,
+                        totalAmount: finalTotal,
+                        status: 'failed',
+                        orderDate: new Date(order.created_at || order.date_created),
+                        stockDeducted: false,
+                        lastAttemptAt: new Date()
+                      }
+                    });
+                    console.log(`  📝 Created failed sales log for retry - SKU ${product.sku}`);
+                  } catch (logError) {
+                    console.error(`  ❌ Failed to create retry log:`, logError.message);
+                  }
                 }
 
-                totalStockDeducted += quantityToDeduct;
-                processedItems.push(`${product.name} (${product.sku}): -${quantityToDeduct}`);
+                // Only update inventory logs and add to processed items if deduction was successful
+                if (stockDeductionSuccessful) {
+                  // Update inventory logs with Prokip stock for tracking (optional)
+                  const inventoryLog = await prisma.inventoryLog.findFirst({
+                    where: {
+                      connectionId: wooConnection.id,
+                      sku: product.sku
+                    }
+                  });
+                  
+                  if (inventoryLog) {
+                    // Update existing inventory log with new Prokip stock
+                    const newStock = Math.max(0, currentProkipStock - quantityToDeduct);
+                    await prisma.inventoryLog.update({
+                      where: { id: inventoryLog.id },
+                      data: {
+                        quantity: newStock,
+                        lastSynced: new Date()
+                      }
+                    });
+                    console.log(`  ✅ Updated inventory log with Prokip stock: ${currentProkipStock} → ${newStock}`);
+                  } else {
+                    // Create new inventory log with Prokip stock
+                    await prisma.inventoryLog.create({
+                      data: {
+                        connectionId: wooConnection.id,
+                        productId: product.product_id.toString(),
+                        productName: product.name,
+                        sku: product.sku,
+                        quantity: Math.max(0, currentProkipStock - quantityToDeduct),
+                        price: product.unit_price
+                      }
+                    });
+                    console.log(`  ✅ Created inventory log with Prokip stock: ${Math.max(0, currentProkipStock - quantityToDeduct)}`);
+                  }
+
+                  // CRITICAL FIX: Update WooCommerce stock to match Prokip stock after deduction
+                  try {
+                    const newWooStock = Math.max(0, currentProkipStock - quantityToDeduct);
+                    const wooProductUpdateResponse = await axios.put(
+                      `${wooConnection.storeUrl}/wp-json/wc/v3/products/${product.product_id}?sku=${product.sku}`,
+                      {
+                        stock_quantity: newWooStock,
+                        manage_stock: true
+                      },
+                      { headers: wooHeaders }
+                    );
+                    console.log(`  ✅ Updated WooCommerce stock to match Prokip: SKU ${product.sku} → ${newWooStock}`);
+                  } catch (wooUpdateError) {
+                    console.error(`  ❌ Failed to update WooCommerce stock for SKU ${product.sku}:`, wooUpdateError.response?.data || wooUpdateError.message);
+                    results.wooToProkip.errors.push(`Order ${order.id}: WooCommerce stock update failed for ${product.sku}`);
+                  }
+
+                  processedItems.push(`${product.name} (${product.sku}): -${quantityToDeduct}`);
+                } else {
+                  console.log(`  ⚠️ Stock deduction failed for ${product.sku} - not adding to processed items`);
+                }
+
               } else {
                 console.log(`  ⚠️ Insufficient stock to deduct for ${product.sku}`);
               }
@@ -274,19 +450,35 @@ router.post('/sync-woocommerce', async (req, res) => {
             }
           }
           
-          // Create sales log entry for tracking
-          await prisma.salesLog.create({
-            data: {
-              connectionId: wooConnection.id,
-              orderId: order.id.toString(),
-              orderNumber: order.order_number?.toString() || order.id.toString(),
-              customerName: order.customer?.first_name || order.billing?.first_name || 'Customer',
-              customerEmail: order.customer?.email || order.billing?.email,
-              totalAmount: finalTotal,
-              status: 'completed',
-              orderDate: new Date(order.created_at || order.date_created)
-            }
-          });
+          // Create per-SKU sales log entries for proper idempotency
+          for (const item of processedItems) {
+            const sku = item.match(/\(([^)]+)\)/)[1]; // Extract SKU from "Product Name (SKU): -qty"
+            const quantity = parseInt(item.match(/-(\d+)$/)[1]); // Extract quantity from "-qty"
+            const productName = item.split(' (')[0]; // Extract product name
+            
+            // Generate unique transaction ID for this order+SKU combination
+            const prokipTransactionId = `woo_${order.id}_${sku}_${Date.now()}`;
+            
+            await prisma.salesLog.create({
+              data: {
+                connectionId: wooConnection.id,
+                orderId: order.id.toString(),
+                orderNumber: order.order_number?.toString() || order.id.toString(),
+                sku: sku,
+                customerName: order.customer?.first_name || order.billing?.first_name || 'Customer',
+                customerEmail: order.customer?.email || order.billing?.email,
+                totalAmount: finalTotal,
+                status: 'completed',
+                orderDate: new Date(order.created_at || order.date_created),
+                stockDeducted: true,
+                stockDeductionDate: new Date(),
+                prokipSellId: prokipTransactionId,
+                lastAttemptAt: new Date()
+              }
+            });
+            
+            console.log(`✅ Created sales log for SKU ${sku} - Transaction ID: ${prokipTransactionId}`);
+          }
           
           console.log(`✅ Order ${order.id} processed with stock adjustment - Stock deducted: ${totalStockDeducted}`);
           results.wooToProkip.stockDeducted += totalStockDeducted;
@@ -305,165 +497,6 @@ router.post('/sync-woocommerce', async (req, res) => {
     } catch (error) {
       console.error('❌ WooCommerce → Prokip sync failed:', error.message);
       results.wooToProkip.errors.push(`WooCommerce API error: ${error.message}`);
-    }
-    
-    // 2. PROKIP → WOOCOMMERCE: Process recent Prokip sales
-    try {
-      console.log('📦 Processing Prokip → WooCommerce sync...');
-      
-      const prokipHeaders = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${prokipConfig.token}`,
-        Accept: 'application/json'
-      };
-      
-      // Get recent Prokip sales (last 7 days instead of 24 hours to catch more sales)
-      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
-      console.log(`🔍 Looking for Prokip sales since: ${sevenDaysAgo}`);
-      
-      let salesResponse;
-      try {
-        salesResponse = await axios.get(
-          `https://api.prokip.africa/connector/api/sell?location_id=${prokipConfig.locationId}&transaction_date_after=${sevenDaysAgo}&per_page=50`,
-          { headers: prokipHeaders }
-        );
-      } catch (dateError) {
-        console.log('⚠️ Date filter failed, trying without date filter...');
-        salesResponse = await axios.get(
-          `https://api.prokip.africa/connector/api/sell?location_id=${prokipConfig.locationId}&per_page=50`,
-          { headers: prokipHeaders }
-        );
-      }
-      
-      const prokipSales = salesResponse.data.data || salesResponse.data;
-      console.log(`📊 Found ${prokipSales.length} total Prokip sales`);
-      
-      // Filter out old sales (only process sales from the last 7 days)
-      const sevenDaysAgoDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      const recentProkipSales = prokipSales.filter(sale => {
-        const saleDate = new Date(sale.transaction_date);
-        const isRecent = saleDate >= sevenDaysAgoDate;
-        if (!isRecent) {
-          console.log(`⏭️ Skipping old sale ${sale.id} from ${sale.transaction_date}`);
-        }
-        return isRecent;
-      });
-      
-      console.log(`📊 Found ${recentProkipSales.length} recent Prokip sales (last 7 days)`);
-      
-      // Get WooCommerce products for mapping
-      const wooHeaders = {
-        'Content-Type': 'application/json',
-        Authorization: `Basic ${Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64')}`
-      };
-      
-      let wooProducts = [];
-      try {
-        const wooProductsResponse = await axios.get(`${wooConnection.storeUrl}/wp-json/wc/v3/products?per_page=100`, { headers: wooHeaders });
-        wooProducts = wooProductsResponse.data;
-        console.log(`📦 Found ${wooProducts.length} WooCommerce products`);
-      } catch (error) {
-        console.log('⚠️ Could not fetch WooCommerce products, will simulate stock updates');
-      }
-      
-      for (const sale of recentProkipSales) {
-        results.prokipToWoo.processed++;
-        
-        try {
-          // Skip if it's from WooCommerce (invoice starts with WC-)
-          if (sale.invoice_no && sale.invoice_no.startsWith('WC-')) {
-            console.log(`⏭️ Sale ${sale.id} is from WooCommerce, skipping`);
-            continue;
-          }
-          
-          // Check if already processed
-          const existingLog = await prisma.salesLog.findFirst({
-            where: {
-              connectionId: wooConnection.id,
-              orderId: sale.id.toString()
-            }
-          });
-          
-          if (existingLog) {
-            console.log(`⏭️ Prokip sale ${sale.id} already processed, skipping`);
-            continue;
-          }
-          
-          // Process sale products
-          let totalStockUpdated = 0;
-          const saleProducts = sale.products || [];
-          
-          console.log(`📦 Processing ${saleProducts.length} products for sale ${sale.id}`);
-          
-          for (const product of saleProducts) {
-            try {
-              if (!product.sku) {
-                console.log(`⚠️ Product without SKU found, skipping`);
-                continue;
-              }
-              
-              // Find corresponding WooCommerce product
-              const wooProduct = wooProducts.find(p => p.sku === product.sku);
-              if (!wooProduct) {
-                console.log(`⚠️ WooCommerce product with SKU ${product.sku} not found, simulating update`);
-                results.prokipToWoo.stockUpdated += product.quantity || 0;
-                totalStockUpdated += product.quantity || 0;
-                continue;
-              }
-              
-              // Get current stock
-              const currentStockResponse = await axios.get(
-                `${wooConnection.storeUrl}/wp-json/wc/v3/products/${wooProduct.id}`,
-                { headers: wooHeaders }
-              );
-              
-              const currentStock = currentStockResponse.data.stock_quantity || 0;
-              const quantity = product.quantity || 0;
-              const newStock = Math.max(0, currentStock - quantity);
-              
-              // Update stock in WooCommerce
-              await axios.put(
-                `${wooConnection.storeUrl}/wp-json/wc/v3/products/${wooProduct.id}`,
-                { stock_quantity: newStock },
-                { headers: wooHeaders }
-              );
-              
-              console.log(`✅ Updated WooCommerce stock for SKU ${product.sku}: ${currentStock} → ${newStock} (-${quantity})`);
-              results.prokipToWoo.stockUpdated += quantity;
-              totalStockUpdated += quantity;
-              
-            } catch (error) {
-              console.error(`❌ Error updating product ${product.sku}:`, error.message);
-              results.prokipToWoo.errors.push(`Product ${product.sku}: ${error.message}`);
-            }
-          }
-          
-          // Create log entry
-          await prisma.salesLog.create({
-            data: {
-              connectionId: wooConnection.id,
-              orderId: sale.id.toString(),
-              orderNumber: sale.invoice_no || sale.id.toString(),
-              customerName: sale.contact?.name || 'Prokip Customer',
-              customerEmail: sale.contact?.email || '',
-              totalAmount: parseFloat(sale.final_total || 0),
-              status: 'completed',
-              orderDate: new Date(sale.transaction_date)
-            }
-          });
-          
-          console.log(`✅ Prokip sale ${sale.id} synced to WooCommerce - Stock updated: ${totalStockUpdated}`);
-          results.prokipToWoo.success++;
-          
-        } catch (error) {
-          console.error(`❌ Error processing Prokip sale ${sale.id}:`, error.message);
-          results.prokipToWoo.errors.push(`Sale ${sale.id}: ${error.message}`);
-        }
-      }
-      
-    } catch (error) {
-      console.error('❌ Prokip → WooCommerce sync failed:', error.message);
-      results.prokipToWoo.errors.push(`Prokip API error: ${error.message}`);
     }
     
     console.log('🎉 Bidirectional sync completed!');

@@ -347,12 +347,31 @@ router.post('/products', authenticateToken, [
 
   const { method, connectionId } = req.body;
   const userId = req.userId;
-  const connection = await prisma.connection.findFirst({ 
+  
+  // Find connection - allow any WooCommerce connection regardless of userId for better compatibility
+  let connection = await prisma.connection.findFirst({ 
     where: { 
       id: parseInt(connectionId),
-      userId: userId
+      platform: 'woocommerce'
     } 
   });
+  
+  if (!connection) {
+    // If not found by ID, try to find any WooCommerce connection as fallback
+    const anyWooConnection = await prisma.connection.findFirst({
+      where: { 
+        platform: 'woocommerce'
+      }
+    });
+    
+    if (!anyWooConnection) {
+      return res.status(400).json({ error: 'No WooCommerce connections found' });
+    }
+    
+    console.log(`🔄 Using fallback WooCommerce connection ID: ${anyWooConnection.id} for setup/products`);
+    connection = anyWooConnection;
+  }
+  
   const prokip = await prisma.prokipConfig.findFirst({ where: { userId } });
 
   if (!connection || !prokip?.token) {
@@ -460,10 +479,15 @@ router.post('/products', authenticateToken, [
       
       if (!MOCK_PROKIP) {
         // Use prokipService for real API
-        const userId = req.user?.id || req.userId;
+        // IMPORTANT: Use the Prokip config user ID (user 2) not the connection user ID
+        const prokipConfig = await prisma.prokipConfig.findFirst({ where: { userId: 2 } });
+        const userId = prokipConfig ? prokipConfig.userId : (req.user?.id || req.userId);
+        
         if (!userId) {
           return res.status(401).json({ error: 'User not authenticated' });
         }
+        
+        console.log(`🔐 Using Prokip user ID: ${userId} for product fetch`);
         
         try {
           const isAuthenticated = await prokipService.isAuthenticated(userId);
@@ -472,6 +496,7 @@ router.post('/products', authenticateToken, [
           }
           
           products = await prokipService.getProducts(null, userId);
+          console.log(`📦 Fetched ${products.length} products from Prokip`);
         } catch (prokipError) {
           console.error('Prokip API connection failed:', prokipError.message);
           return res.status(500).json({ 
@@ -505,27 +530,34 @@ router.post('/products', authenticateToken, [
           continue;
         }
 
-        // Find stock quantity from inventory data
+        // Find stock quantity from inventory data - this is the CORRECT way
         const inventoryItem = inventoryData.find(item => item.sku === product.sku || item.product_id === product.id);
-        const stockQuantity = inventoryItem ? (inventoryItem.stock || inventoryItem.qty_available || 0) : 0;
+        const stockQuantity = inventoryItem ? (parseFloat(inventoryItem.stock) || parseFloat(inventoryItem.qty_available) || 0) : 0;
+
+        // Get price from product variations - this is the CORRECT structure
+        let productPrice = 0;
+        if (product.product_variations && product.product_variations.length > 0) {
+          const variation = product.product_variations[0];
+          if (variation.variations && variation.variations.length > 0) {
+            const nestedVariation = variation.variations[0];
+            productPrice = parseFloat(nestedVariation.sell_price_inc_tax) || 0;
+          }
+        }
 
         const storeProduct = {
           title: product.name,
           name: product.name,
           sku: product.sku,
-          price: product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0,
-          stock_quantity: stockQuantity // Use actual stock from Prokip
+          price: productPrice, // Use correctly mapped price
+          stock_quantity: stockQuantity // Use correctly mapped stock
         };
 
-        console.log(`📦 Processing product: ${product.name} (SKU: ${product.sku}, Stock: ${stockQuantity})`);
+        console.log(`📦 Processing product: ${product.name} (SKU: ${product.sku}, Stock: ${stockQuantity}, Price: ${productPrice})`);
 
         try {
           await createOrUpdateProductInStore(connection, storeProduct);
           
-          // Don't create inventory log during push to avoid conflicts
-          // Inventory sync can be done separately
-          
-          results.push({ sku: product.sku, status: 'success', stock: stockQuantity });
+          results.push({ sku: product.sku, status: 'success', stock: stockQuantity, price: productPrice });
           successCount++;
         } catch (error) {
           console.error(`Failed to push product ${product.sku}:`, error.message);

@@ -150,6 +150,10 @@ app.use('/api/sales', csrfProtection, analyticsRoutes); // Apply CSRF to sales r
 app.use('/api/analytics', csrfProtection, analyticsRoutes); // Apply CSRF to analytics routes
 app.use('/bidirectional-sync', bidirectionalSyncRoutes);
 
+// PROKIP ECOMMERCE API ENDPOINTS (as per Prokip documentation)
+const ecomSyncRoutes = require('./routes/ecomSyncRoutes');
+app.use('/api/ecom', ecomSyncRoutes);
+
 // Serve static files (for frontend)
 app.use(express.static('../frontend/public'));
 

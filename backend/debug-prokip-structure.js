@@ -1,67 +1,71 @@
-/**
- * Debug script to examine the actual Prokip API response structure
- */
-
+const prisma = require('./src/lib/prisma');
 const prokipService = require('./src/services/prokipService');
 
-async function debugProkipProductStructure() {
+async function debugProkipProducts() {
   try {
-    console.log('🔍 Debugging Prokip product structure...\n');
+    console.log('🧪 Debugging Prokip products structure...');
     
-    const products = await prokipService.getProducts(null, 50);
+    // Get user ID from Prokip config
+    const prokipConfig = await prisma.prokipConfig.findFirst({ where: { userId: 2 } });
     
-    console.log(`📦 Found ${products.length} products\n`);
+    if (!prokipConfig) {
+      console.log('❌ No Prokip config found for user 2');
+      return;
+    }
     
-    if (products.length > 0) {
-      console.log('📋 Full product structure (first product):');
-      console.log(JSON.stringify(products[0], null, 2));
+    console.log('✅ Found Prokip config for user 2');
+    
+    // Get products directly
+    const products = await prokipService.getProducts(null, 2);
+    
+    console.log(`📊 Total products: ${products.length}`);
+    
+    // Show first few products with full structure
+    console.log('\n📦 First 3 products with structure:');
+    products.slice(0, 3).forEach((product, index) => {
+      console.log(`\n${index + 1}. ${product.name}`);
+      console.log(`   SKU: ${product.sku}`);
+      console.log(`   Stock: ${product.stock || product.qty_available || 'N/A'}`);
+      console.log(`   Has variations: ${!!(product.product_variations && product.product_variations.length > 0)}`);
       
-      console.log('\n🔍 Looking for stock-related fields...');
-      const firstProduct = products[0];
-      const allKeys = Object.keys(firstProduct);
-      console.log('All fields:', allKeys);
+      if (product.product_variations && product.product_variations.length > 0) {
+        console.log(`   Variations count: ${product.product_variations.length}`);
+        product.product_variations.slice(0, 2).forEach((variation, vIndex) => {
+          console.log(`     Variation ${vIndex + 1}: ${variation.name}`);
+          console.log(`       Stock: ${variation.stock || variation.qty_available || 'N/A'}`);
+          console.log(`       Price structure:`, Object.keys(variation));
+          if (variation.variations && variation.variations.length > 0) {
+            console.log(`       Nested variations: ${variation.variations.length}`);
+            variation.variations.slice(0, 1).forEach(nested => {
+              console.log(`         Nested: ${nested.name} - Price: ${nested.sell_price_inc_tax} - Stock: ${nested.stock || nested.qty_available}`);
+            });
+          }
+        });
+      }
       
-      // Look for any field that might contain stock information
-      const stockRelatedFields = allKeys.filter(key => 
-        key.toLowerCase().includes('stock') || 
-        key.toLowerCase().includes('qty') || 
-        key.toLowerCase().includes('quantity') ||
-        key.toLowerCase().includes('inventory') ||
-        key.toLowerCase().includes('available')
-      );
+      console.log(`   Price fields:`, Object.keys(product).filter(k => k.includes('price')));
+    });
+    
+    // Check inventory data
+    console.log('\n🧪 Checking inventory data...');
+    try {
+      const inventory = await prokipService.getInventory(null, 2);
+      console.log(`📊 Inventory items: ${inventory.length}`);
       
-      console.log('Stock-related fields:', stockRelatedFields);
-      
-      // Check values for these fields
-      stockRelatedFields.forEach(field => {
-        console.log(`${field}:`, firstProduct[field]);
+      console.log('\n📦 First 3 inventory items:');
+      inventory.slice(0, 3).forEach((item, index) => {
+        console.log(`${index + 1}. SKU: ${item.sku} - Stock: ${item.stock || item.qty_available} - Product ID: ${item.product_id}`);
       });
       
-      // Look specifically at polo shirts
-      const poloShirts = products.filter(p => 
-        p.name && p.name.toLowerCase().includes('polo')
-      );
-      
-      if (poloShirts.length > 0) {
-        console.log('\n👕 Polo shirt structure:');
-        console.log(JSON.stringify(poloShirts[0], null, 2));
-      }
-      
-      // Check if there's a nested structure
-      if (firstProduct.product_variations) {
-        console.log('\n📦 Product variations found:');
-        console.log(JSON.stringify(firstProduct.product_variations, null, 2));
-      }
-      
-      if (firstProduct.variations) {
-        console.log('\n📦 Variations found:');
-        console.log(JSON.stringify(firstProduct.variations, null, 2));
-      }
+    } catch (inventoryError) {
+      console.error('❌ Inventory fetch failed:', inventoryError.message);
     }
     
   } catch (error) {
     console.error('❌ Debug failed:', error.message);
+  } finally {
+    await prisma.$disconnect();
   }
 }
 
-debugProkipProductStructure();
+debugProkipProducts();
