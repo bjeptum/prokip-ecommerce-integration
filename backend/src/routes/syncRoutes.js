@@ -2,10 +2,8 @@ const express = require('express');
 const authenticateToken = require('../middlewares/authMiddleware');
 const { pollProkipToStores } = require('../services/syncService');
 const { performBidirectionalSync } = require('../services/bidirectionalSyncService');
+const prokipEcomClient = require('../services/prokipEcomClient');
 const prisma = require('../lib/prisma');
-const { getWooOrders } = require('../services/wooService');
-const { processStoreToProkip } = require('../services/syncService');
-const { decryptCredentials } = require('../services/storeService');
 const errorRecoveryService = require('../services/errorRecoveryService');
 
 const router = express.Router();
@@ -47,12 +45,12 @@ router.use(async (req, res, next) => {
 
 router.post('/', async (req, res) => {
   await pollProkipToStores();
-  res.json({ success: true, message: 'Manual sync triggered' });
+  res.json({ success: true, message: 'Manual sync triggered (no-op in /api/ecom mode)' });
 });
 
 /**
  * BIDIRECTIONAL SYNC ENDPOINT
- * Handles proper bidirectional sync according to Prokip documentation
+ * Uses Prokip-2 /api/ecom pipeline (store → Prokip only)
  */
 router.post('/bidirectional', authenticateToken, async (req, res) => {
   try {
@@ -90,18 +88,15 @@ router.post('/bidirectional', authenticateToken, async (req, res) => {
 router.get('/status', async (req, res) => {
   const connections = await prisma.connection.findMany();
 
-  // Get Prokip transaction counts
   let prokipStats = { products: 0, sales: 0, purchases: 0 };
 
   try {
-    // Get unique product count from inventory logs
     const prokipProducts = await prisma.inventoryLog.groupBy({
       by: ['sku'],
       _count: { sku: true }
     });
     prokipStats.products = prokipProducts.length;
 
-    // Get sales count - count all completed/paid orders
     const salesCount = await prisma.salesLog.count({
       where: { 
         status: {
@@ -110,10 +105,8 @@ router.get('/status', async (req, res) => {
       }
     });
 
-    // For purchases, we can count webhook events or use a different approach
-    // Since we don't have a separate purchase tracking, set to 0 or same as sales
     prokipStats.sales = salesCount;
-    prokipStats.purchases = 0; // Not tracked separately in current schema
+    prokipStats.purchases = 0;
   } catch (error) {
     console.error('Error fetching Prokip stats:', error);
   }
@@ -122,17 +115,14 @@ router.get('/status', async (req, res) => {
     let productCount = 0;
     let orderCount = 0;
 
-    // Get product count for this connection
     try {
       productCount = await prisma.inventoryLog.count({
         where: { connectionId: c.id }
       });
     } catch (error) {
-      // Table doesn't exist or other error
       productCount = 0;
     }
 
-    // Get order count from SalesLog for this connection
     try {
       orderCount = await prisma.salesLog.count({
         where: {
@@ -143,7 +133,6 @@ router.get('/status', async (req, res) => {
         }
       });
     } catch (error) {
-      // Table doesn't exist or other error
       orderCount = 0;
     }
 
@@ -202,74 +191,19 @@ router.post('/pull-orders', authenticateToken, async (req, res) => {
   
   for (const conn of connections) {
     try {
-      // Remove date filter to get all recent orders
-      const { consumerKey, consumerSecret } = decryptCredentials(conn);
-      const orders = await getWooOrders(conn.storeUrl, consumerKey, consumerSecret, null, null, null, null, null);
-      
-      console.log(`🔄 Processing ${orders.length} orders for ${conn.storeUrl}...`);
-      
-      // Get userId from connection
-      const userId = conn.userId || 50; // Default to 50 if not set
-      
-      for (const order of orders) {
-        console.log(`🔄 Processing order #${order.id} for stock deduction...`);
-        try {
-          // TEMPORARY WORKAROUND: Use direct Prokip API call instead of processStoreToProkip
-          // This bypasses the authentication issues while we fix them
-          const prokipConfig = await prisma.prokipConfig.findFirst({
-            where: { userId: userId || 50 }
-          });
-          
-          if (prokipConfig?.token && prokipConfig.locationId) {
-            // Map order to Prokip sell format
-            const { mapOrderToProkipSell } = require('../services/prokipMapper');
-            const sellBody = await mapOrderToProkipSell(order, prokipConfig.locationId, 'woocommerce');
-            
-            if (sellBody) {
-              // Make direct API call to Prokip
-              const axios = require('axios');
-              const headers = {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${prokipConfig.token}`,
-                Accept: 'application/json'
-              };
-              
-              const response = await axios.post('https://api.prokip.africa/connector/api/sell', sellBody, { headers });
-              console.log(`✅ Direct sale created for order #${order.id}:`, response.data);
-              
-              // Create sales log entry
-              await prisma.salesLog.create({
-                data: {
-                  connectionId: conn.id,
-                  orderId: order.id.toString(),
-                  orderNumber: order.order_number?.toString() || order.id.toString(),
-                  customerName: order.customer?.first_name || order.billing?.first_name || 'Customer',
-                  customerEmail: order.customer?.email || order.billing?.email,
-                  totalAmount: parseFloat(order.total || order.total_price || 0),
-                  status: 'completed',
-                  orderDate: new Date(order.created_at || order.date_created)
-                }
-              });
-              
-              console.log(`✅ Sales log entry created for order #${order.id}`);
-            } else {
-              console.log(`❌ Failed to map order #${order.id} to Prokip format`);
-            }
-          } else {
-            console.log('❌ Prokip config not found for stock deduction');
-          }
-          
-          console.log(`✅ Order #${order.id} processed successfully`);
-        } catch (error) {
-          console.error(`❌ Failed to process order #${order.id}:`, error.message);
-        }
-      }
+      console.log(`🔄 Triggering Prokip-2 sync for store ${conn.storeUrl}...`);
+      await prokipEcomClient.syncOrders({
+        store_id: conn.id,
+        status: 'processing',
+        limit: 100,
+        page: 1
+      }, userId);
     } catch (error) {
-      console.error(`Failed to pull orders from ${conn.storeUrl}:`, error.message);
+      console.error(`Failed to trigger Prokip-2 sync for ${conn.storeUrl}:`, error.message);
     }
   }
   
-  res.json({ success: true, message: 'Orders pulled successfully' });
+  res.json({ success: true, message: 'Orders sync triggered via Prokip-2' });
 });
 
 // Get sync errors for monitoring
@@ -320,7 +254,7 @@ router.patch('/errors/:id/resolve', async (req, res) => {
 // Automatic error recovery
 router.post('/recover', async (req, res) => {
   try {
-    const { errorId, connectionId } = req.body;
+    const { errorId } = req.body;
     
     const result = await errorRecoveryService.processErrorRecovery(errorId);
     
@@ -360,9 +294,6 @@ router.get('/recovery-stats', async (req, res) => {
 // Schedule automatic error recovery (runs every 5 minutes)
 router.post('/schedule-recovery', async (req, res) => {
   try {
-    const { connectionId } = req.body;
-    
-    // Start background error recovery process
     setTimeout(async () => {
       try {
         console.log('🔄 Starting scheduled error recovery...');
@@ -381,731 +312,6 @@ router.post('/schedule-recovery', async (req, res) => {
     console.error('Failed to schedule error recovery:', error);
     res.status(500).json({
       error: 'Failed to schedule error recovery',
-      details: error.message
-    });
-  }
-});
-
-// Pull sales from store
-router.post('/pull-sales', authenticateToken, async (req, res) => {
-  try {
-    const { connectionId } = req.body;
-    const userId = req.userId;
-
-    if (!connectionId) {
-      return res.status(400).json({ error: 'Connection ID is required' });
-    }
-
-    // Verify connection belongs to user
-    const connection = await prisma.connection.findFirst({
-      where: {
-        id: parseInt(connectionId)
-      }
-    });
-
-    if (!connection) {
-      return res.status(404).json({ 
-        error: 'Store not found',
-        message: 'This store connection does not exist or you do not have access to it'
-      });
-    }
-
-    // Fetch orders (sales) from the store using the same authentication method
-    const { consumerKey, consumerSecret } = decryptCredentials(connection);
-    // Remove date filter to get all recent orders
-    const orders = await getWooOrders(connection.storeUrl, consumerKey, consumerSecret, null, null, null, null, null);
-    
-    // Process each order
-    for (const order of orders) {
-      console.log(`🔄 Processing order #${order.id} for stock deduction...`);
-      try {
-        // TEMPORARY WORKAROUND: Use direct Prokip API call instead of processStoreToProkip
-        // This bypasses the authentication issues while we fix them
-        const prokipConfig = await prisma.prokipConfig.findFirst({
-          where: { userId: userId || 50 }
-        });
-        
-        if (prokipConfig?.token && prokipConfig.locationId) {
-          // COMPLETE BYPASS: Use direct Prokip API approach that works
-          console.log(`🔄 Processing order #${order.id} with direct API approach...`);
-          
-          // Get all Prokip products first to have them available for variation mapping
-          const productsResponse = await axios.get('https://api.prokip.africa/connector/api/product?per_page=-1', {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${prokipConfig.token}`,
-              Accept: 'application/json'
-            }
-          });
-          const prokipProducts = productsResponse.data.data;
-          
-          // Process order items directly
-          const finalTotal = parseFloat(order.total || order.total_price || 0);
-          const sellProducts = order.line_items
-            .filter(item => item.sku) // Only items with SKUs
-            .map(item => {
-              // Get product info from Prokip to get correct variation_id
-              const prokipProduct = prokipProducts.find(p => p.sku === item.sku);
-              if (!prokipProduct) {
-                console.log(`❌ Product with SKU ${item.sku} not found in Prokip`);
-                return null;
-              }
-              
-              // Handle variation_id correctly
-              let variationId = prokipProduct.id; // Default to product ID
-              if (prokipProduct.variations && prokipProduct.variations.length > 0) {
-                // Use the first variation's variation_id
-                const firstVariation = prokipProduct.variations[0];
-                if (firstVariation && firstVariation.variation_id) {
-                  variationId = firstVariation.variation_id;
-                  console.log(`🔄 Using variation ID: ${variationId} for product ${item.sku}`);
-                }
-              } else if (prokipProduct.type === 'single') {
-                // For single products, use the known variation ID
-                if (item.sku === '4922111') {
-                  variationId = 5291257; // Known variation ID for this product
-                  console.log(`🔄 Using known variation ID: ${variationId} for single product ${item.sku}`);
-                }
-              }
-              
-              return {
-                name: item.name || 'Product',
-                sku: item.sku,
-                quantity: item.quantity,
-                unit_price: parseFloat(item.price || 0),
-                total_price: parseFloat(item.total || 0),
-                product_id: prokipProduct.id,
-                variation_id: variationId
-              };
-            });
-          
-          // Filter out null products
-          const validSellProducts = sellProducts.filter(p => p !== null);
-          
-          if (validSellProducts.length === 0) {
-            console.log(`❌ No valid products found for order #${order.id}`);
-            return;
-          }
-          
-          // Use the exact working format from prokipRoutes.js
-          const correctSellBody = {
-            sells: [{
-              location_id: parseInt(prokipConfig.locationId),
-              contact_id: 1849984, // Use existing contact ID
-              transaction_date: new Date().toISOString().slice(0, 19).replace('T', ' '),
-              invoice_no: `WC-${order.id}`,
-              status: 'final',
-              type: 'sell',
-              payment_status: 'paid',
-              final_total: finalTotal,
-              products: validSellProducts,
-              payments: [{
-                method: 'woocommerce',
-                amount: finalTotal,
-                paid_on: new Date().toISOString().slice(0, 19).replace('T', ' ')
-              }]
-            }]
-          };
-          
-          console.log('📝 Final sell body:', JSON.stringify(correctSellBody, null, 2));
-          
-          // Make direct API call to Prokip
-          const axios = require('axios');
-          const headers = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${prokipConfig.token}`,
-            Accept: 'application/json'
-          };
-          
-          try {
-            const response = await axios.post('https://api.prokip.africa/connector/api/sell', correctSellBody, { headers });
-            console.log(`✅ Sale created for order #${order.id}:`, response.data);
-            
-            // Check if sale was actually created (no error in response)
-            const saleCreated = response.data && 
-                              Array.isArray(response.data) && 
-                              response.data.length > 0 && 
-                              !response.data[0].original?.error;
-            
-            if (saleCreated) {
-              // Create sales log entry
-              const salesLog = await prisma.salesLog.create({
-                data: {
-                  connectionId: connection.id,
-                  orderId: order.id.toString(),
-                  orderNumber: order.order_number?.toString() || order.id.toString(),
-                  customerName: order.customer?.first_name || order.billing?.first_name || 'Customer',
-                  customerEmail: order.customer?.email || order.billing?.email,
-                  totalAmount: finalTotal,
-                  status: 'completed',
-                  orderDate: new Date(order.created_at || order.date_created)
-                }
-              });
-              
-              console.log(`✅ Sales log entry created for order #${order.id}`);
-              
-              // CRITICAL: Automatically deduct stock from Prokip
-              console.log(`🔄 Deducting stock for order #${order.id}...`);
-              try {
-                const { deductStockDirectlyFromProkip } = require('../services/directStockDeduction');
-                
-                // Prepare products for stock deduction with SKU
-                const deductionProducts = validSellProducts.map(item => ({
-                  sku: item.sku,
-                  productId: item.product_id,
-                  quantity: item.quantity
-                }));
-                
-                console.log(`📦 Products to deduct:`, deductionProducts);
-                
-                // Deduct stock from Prokip using direct method
-                const deductionResult = await deductStockDirectlyFromProkip(
-                  deductionProducts, 
-                  prokipConfig.locationId, 
-                  `WooCommerce order #${order.id}`, 
-                  userId
-                );
-                
-                console.log(`✅ Stock deducted successfully for order #${order.id}:`, deductionResult);
-                
-                // Update sales log to indicate stock was deducted
-                await prisma.salesLog.update({
-                  where: { id: salesLog.id },
-                  data: { 
-                    stockDeducted: deductionResult.success,
-                    stockDeductionDate: new Date()
-                  }
-                });
-                
-                if (deductionResult.success) {
-                  console.log(`🎉 STOCK DEDUCTION SUCCESSFUL for order #${order.id}!`);
-                  console.log(`   ✅ Successful: ${deductionResult.successful}/${deductionResult.totalProducts} products`);
-                } else {
-                  console.log(`⚠️ Stock deduction partially failed for order #${order.id}`);
-                }
-              } catch (stockError) {
-                console.error(`❌ Stock deduction failed for order #${order.id}:`, stockError.message);
-                
-                // Still mark as processed but note the stock deduction failed
-                await prisma.salesLog.update({
-                  where: { id: salesLog.id },
-                  data: { 
-                    stockDeducted: false,
-                    stockDeductionDate: new Date()
-                  }
-                });
-              }
-            } else {
-              console.log(`❌ Sale creation failed for order #${order.id}:`, response.data);
-            }
-          } catch (error) {
-            console.error(`❌ API call failed for order #${order.id}:`, error.message);
-          }
-        } else {
-          console.log('❌ Prokip config not found for stock deduction');
-        }
-        
-        console.log(`✅ Order #${order.id} processed successfully`);
-      } catch (error) {
-        console.error(`❌ Failed to process order #${order.id}:`, error.message);
-      }
-    }
-    
-    // Update last sync time
-    await prisma.connection.update({
-      where: { id: connection.id },
-      data: { lastSync: new Date() }
-    });
-    
-    res.json({ 
-      success: true, 
-      message: 'Sales sync completed successfully',
-      syncedAt: new Date().toISOString(),
-      ordersProcessed: orders.length
-    });
-
-  } catch (error) {
-    console.error('Error pulling sales:', error);
-    res.status(500).json({ 
-      error: 'Failed to pull sales',
-      message: 'An unexpected error occurred while pulling sales'
-    });
-  }
-});
-
-// Pull products from connected store to Prokip
-router.post('/pull-products', authenticateToken, async (req, res) => {
-  const { connectionId } = req.body;
-  const userId = req.userId;
-  
-  if (!connectionId) {
-    return res.status(400).json({ error: 'Connection ID is required' });
-  }
-  
-  try {
-    const connection = await prisma.connection.findFirst({
-      where: { 
-        id: parseInt(connectionId),
-        userId: userId
-      }
-    });
-    
-    if (!connection) {
-      return res.status(404).json({ error: 'Connection not found or access denied' });
-    }
-    
-    let storeProducts = [];
-    
-    // Get products from the store
-    if (connection.platform === 'shopify') {
-      const { getShopifyProducts } = require('../services/shopifyService');
-      storeProducts = await getShopifyProducts(connection.storeUrl, connection.accessToken);
-    } else if (connection.platform === 'woocommerce') {
-      const { getWooProducts } = require('../services/wooService');
-      storeProducts = await getWooProducts(connection);
-    }
-    
-    console.log(`📦 Pulling ${storeProducts.length} products from ${connection.platform} to Prokip`);
-    
-    // Get Prokip service for creating products
-    const prokipService = require('../services/prokipService');
-    const results = [];
-    
-    for (const product of storeProducts) {
-      if (!product.sku) continue;
-      
-      try {
-        // Transform store product to Prokip format
-        const prokipProduct = {
-          name: product.title || product.name,
-          sku: product.sku,
-          price: product.price || 0,
-          description: product.description || product.body_html || '',
-          quantity: product.inventory_quantity || product.stock || 0
-        };
-        
-        // Create product in Prokip
-        await prokipService.createProduct(prokipProduct, userId);
-        
-        // Log to inventory tracking
-        await prisma.inventoryLog.upsert({
-          where: {
-            connectionId_sku: {
-              connectionId: connection.id,
-              sku: product.sku
-            }
-          },
-          update: {
-            productName: prokipProduct.name,
-            quantity: prokipProduct.quantity,
-            price: prokipProduct.price,
-            lastSynced: new Date()
-          },
-          create: {
-            connectionId: connection.id,
-            sku: product.sku,
-            productName: prokipProduct.name,
-            quantity: prokipProduct.quantity,
-            price: prokipProduct.price
-          }
-        });
-        
-        results.push({ sku: product.sku, status: 'success', message: 'Synced to Prokip' });
-        
-      } catch (error) {
-        results.push({ sku: product.sku, status: 'error', message: error.message });
-      }
-    }
-    
-    res.json({
-      success: true,
-      message: `Processed ${storeProducts.length} products from ${connection.platform} to Prokip`,
-      results: results
-    });
-    
-  } catch (error) {
-    console.error('Pull products sync failed:', error);
-    res.status(500).json({ 
-      error: 'Pull products sync failed',
-      details: error.message 
-    });
-  }
-});
-
-// Master bidirectional sync between Prokip and store
-router.post('/bidirectional', authenticateToken, async (req, res) => {
-  const { connectionId } = req.body;
-  const userId = req.userId;
-  
-  if (!connectionId) {
-    return res.status(400).json({ error: 'Connection ID is required' });
-  }
-  
-  try {
-    const connection = await prisma.connection.findFirst({
-      where: { 
-        id: parseInt(connectionId),
-        userId: userId
-      }
-    });
-    
-    if (!connection) {
-      return res.status(404).json({ error: 'Connection not found or access denied' });
-    }
-    
-    const prokipService = require('../services/prokipService');
-    const { createProductInStore, updateInventoryInStore } = require('../services/storeService');
-    const results = [];
-    
-    // Get products from both systems
-    let storeProducts = [];
-    let prokipProducts = await prokipService.getProducts(null, userId);
-    
-    if (connection.platform === 'shopify') {
-      const { getShopifyProducts } = require('../services/shopifyService');
-      storeProducts = await getShopifyProducts(connection.storeUrl, connection.accessToken);
-      // Transform Shopify products to standard format
-      storeProducts = storeProducts.map(shopifyProduct => {
-        const variant = shopifyProduct.variants && shopifyProduct.variants[0] ? shopifyProduct.variants[0] : {};
-        return {
-          id: shopifyProduct.id,
-          name: shopifyProduct.title,
-          sku: variant.sku || shopifyProduct.handle || 'N/A',
-          price: parseFloat(variant.price) || 0,
-          stock_quantity: variant.inventory_quantity || 0,
-          description: shopifyProduct.body_html || ''
-        };
-      });
-    } else if (connection.platform === 'woocommerce') {
-      const { getWooProducts } = require('../services/wooService');
-      storeProducts = await getWooProducts(connection);
-    }
-    
-    // Sync from Prokip to Store
-    for (const prokipProduct of prokipProducts) {
-      if (!prokipProduct.sku) continue;
-      
-      try {
-        const storeProduct = storeProducts.find(sp => sp.sku === prokipProduct.sku);
-        
-        if (!storeProduct) {
-          // Product doesn't exist in store, create it
-          const newStoreProduct = {
-            title: prokipProduct.name,
-            sku: prokipProduct.sku,
-            price: prokipProduct.price || 0,
-            description: prokipProduct.description || '',
-            stock_quantity: prokipProduct.quantity || 0
-          };
-          await createProductInStore(connection, newStoreProduct);
-          results.push({ sku: prokipProduct.sku, action: 'created_in_store', message: 'Product created in store' });
-        } else {
-          // Product exists, update inventory if different
-          if (storeProduct.stock_quantity !== prokipProduct.quantity) {
-            await updateInventoryInStore(connection, prokipProduct.sku, prokipProduct.quantity || 0);
-            results.push({ sku: prokipProduct.sku, action: 'updated_store_inventory', message: 'Store inventory updated' });
-          }
-        }
-      } catch (error) {
-        results.push({ sku: prokipProduct.sku, action: 'prokip_to_store_error', message: error.message });
-      }
-    }
-    
-    // Sync from Store to Prokip
-    for (const storeProduct of storeProducts) {
-      if (!storeProduct.sku) continue;
-      
-      try {
-        const prokipProduct = prokipProducts.find(pp => pp.sku === storeProduct.sku);
-        
-        if (!prokipProduct) {
-          // Product doesn't exist in Prokip, create it
-          const newProkipProduct = {
-            name: storeProduct.name,
-            sku: storeProduct.sku,
-            price: storeProduct.price || 0,
-            description: storeProduct.description || '',
-            quantity: storeProduct.stock_quantity || 0
-          };
-          await prokipService.createProduct(newProkipProduct, userId);
-          results.push({ sku: storeProduct.sku, action: 'created_in_prokip', message: 'Product created in Prokip' });
-        }
-      } catch (error) {
-        results.push({ sku: storeProduct.sku, action: 'store_to_prokip_error', message: error.message });
-      }
-    }
-    
-    // Update inventory logs for tracking
-    for (const storeProduct of storeProducts) {
-      try {
-        await prisma.inventoryLog.upsert({
-          where: {
-            connectionId_sku: {
-              connectionId: connection.id,
-              sku: storeProduct.sku
-            }
-          },
-          update: {
-            productName: storeProduct.name,
-            quantity: storeProduct.stock_quantity,
-            price: storeProduct.price,
-            lastSynced: new Date()
-          },
-          create: {
-            connectionId: connection.id,
-            sku: storeProduct.sku,
-            productName: storeProduct.name,
-            quantity: storeProduct.stock_quantity,
-            price: storeProduct.price
-          }
-        });
-      } catch (error) {
-        // Log error but don't fail the sync
-      }
-    }
-    
-    res.json({
-      success: true,
-      message: `Bidirectional sync completed: ${prokipProducts.length} Prokip products, ${storeProducts.length} store products`,
-      results: results
-    });
-    
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Bidirectional sync failed',
-      details: error.message 
-    });
-  }
-});
-
-// Sync products from Prokip to connected stores
-router.post('/products', authenticateToken, async (req, res) => {
-  const { connectionId } = req.body;
-  const userId = req.userId;
-  
-  if (!connectionId) {
-    return res.status(400).json({ error: 'Connection ID is required' });
-  }
-  
-  try {
-    const connection = await prisma.connection.findFirst({
-      where: { 
-        id: parseInt(connectionId),
-        userId: userId
-      }
-    });
-    
-    if (!connection) {
-      return res.status(404).json({ error: 'Connection not found or access denied' });
-    }
-    
-    // Get Prokip products
-    const prokipService = require('../services/prokipService');
-    const products = await prokipService.getProducts(null, userId);
-    
-    console.log(`📦 Syncing ${products.length} products from Prokip to ${connection.platform}`);
-    
-    const { createProductInStore } = require('../services/storeService');
-    const results = [];
-    
-    for (const product of products) {
-      if (!product.sku) continue;
-      
-      try {
-        // Transform product data for store creation
-        const storeProduct = {
-          title: product.name || product.title,
-          sku: product.sku,
-          price: product.price || 0,
-          description: product.description || ''
-        };
-        
-        await createProductInStore(connection, storeProduct);
-        results.push({ sku: product.sku, status: 'success', message: 'Product created' });
-        console.log(`✅ Created product: ${product.name} (${product.sku})`);
-        
-      } catch (error) {
-        results.push({ sku: product.sku, status: 'error', message: error.message });
-        console.error(`❌ Failed to create product ${product.sku}:`, error.message);
-      }
-    }
-    
-    res.json({
-      success: true,
-      message: `Processed ${products.length} products`,
-      results: results
-    });
-    
-  } catch (error) {
-    console.error('Product sync failed:', error);
-    res.status(500).json({ 
-      error: 'Product sync failed',
-      details: error.message 
-    });
-  }
-});
-
-// Sync inventory and prices from Prokip to connected store
-router.post('/inventory', authenticateToken, async (req, res) => {
-  const { connectionId } = req.body;
-  const userId = req.userId;
-  
-  if (!connectionId) {
-    return res.status(400).json({ error: 'Connection ID is required' });
-  }
-  
-  try {
-    // Find connection - allow any WooCommerce connection regardless of userId for better compatibility
-    let connection = await prisma.connection.findFirst({
-      where: { 
-        id: parseInt(connectionId),
-        platform: 'woocommerce'
-      }
-    });
-    
-    if (!connection) {
-      // If not found by ID, try to find any WooCommerce connection as fallback
-      const anyWooConnection = await prisma.connection.findFirst({
-        where: { 
-          platform: 'woocommerce'
-        }
-      });
-      
-      if (!anyWooConnection) {
-        return res.status(404).json({ error: 'No WooCommerce connections found' });
-      }
-      
-      console.log(`🔄 Using fallback WooCommerce connection ID: ${anyWooConnection.id} for inventory sync`);
-      // Use the fallback connection
-      connection = anyWooConnection;
-    }
-    
-    // Get Prokip products - fix userId extraction
-    const prokipService = require('../services/prokipService');
-    
-    // Get user's Prokip config
-    const prokipConfig = await prisma.prokipConfig.findFirst({ where: { userId } });
-    
-    if (!prokipConfig) {
-      return res.status(404).json({ error: 'No Prokip configuration found for this user' });
-    }
-    
-    // If no userId from authentication, use default user 50
-    if (!userId) {
-      console.warn('⚠️ No userId from authentication, using default user 50');
-      userId = 50;
-    }
-    
-    console.log('🔍 Using userId:', userId, 'for inventory sync');
-    
-    // Get products directly (they contain stock info)
-    const products = await prokipService.getProducts(prokipConfig.locationId || null, userId);
-    
-    console.log('📦 Fetched products:', products.length, 'items');
-    
-    // Create inventory data from products (since getInventory endpoint may not exist)
-    const inventory = products.map(product => ({
-      sku: product.sku,
-      stock: product.stock || product.qty_available || 0,
-      product_id: product.id,
-      name: product.name
-    })).filter(item => item.sku && item.stock > 0); // Only include products with SKU and stock
-    
-    console.log('📊 Products with stock:', inventory.length, 'items');
-    
-    const { updateInventoryInStore } = require('../services/storeService');
-    const results = [];
-    
-    for (const product of products) {
-      const sku = product.sku;
-      if (!sku) continue;
-      
-      // Get stock directly from product (since we already have it)
-      const quantity = product.stock || product.qty_available || 0;
-      
-      // Skip products without stock
-      if (quantity <= 0) {
-        console.log(`⏭️ Skipping ${product.name} - no stock (${quantity})`);
-        continue;
-      }
-      const price = product.product_variations?.[0]?.variations?.[0]?.sell_price_inc_tax || 0;
-      
-      try {
-        // Try to update inventory in the store (Shopify/WooCommerce)
-        let storeUpdateSuccess = false;
-        try {
-          await updateInventoryInStore(connection, sku, parseInt(quantity));
-          storeUpdateSuccess = true;
-        } catch (storeError) {
-          console.error(`Store inventory update failed for SKU ${sku}:`, storeError.message);
-          // Continue to update the log even if store update fails
-        }
-        
-        // Update inventory log using findFirst + create/update pattern
-        // This works regardless of whether compound unique constraint exists
-        const existingLog = await prisma.inventoryLog.findFirst({
-          where: {
-            connectionId: connection.id,
-            sku: sku
-          }
-        });
-        
-        if (existingLog) {
-          await prisma.inventoryLog.update({
-            where: { id: existingLog.id },
-            data: {
-              quantity: parseInt(quantity),
-              price: parseFloat(price),
-              lastSynced: new Date()
-            }
-          });
-        } else {
-          await prisma.inventoryLog.create({
-            data: {
-              connectionId: connection.id,
-              productId: product.id?.toString() || sku,
-              productName: product.name || `Product ${sku}`,
-              sku,
-              quantity: parseInt(quantity),
-              price: parseFloat(price),
-              lastSynced: new Date()
-            }
-          });
-        }
-        
-        results.push({ 
-          sku, 
-          status: storeUpdateSuccess ? 'success' : 'partial', 
-          quantity, 
-          price,
-          storeUpdated: storeUpdateSuccess,
-          message: storeUpdateSuccess ? 'Synced successfully' : 'Logged but store update failed'
-        });
-      } catch (error) {
-        console.error(`Failed to sync inventory for SKU ${sku}:`, error.message);
-        results.push({ sku, status: 'error', error: error.message });
-      }
-    }
-    
-    // Update connection last sync time
-    await prisma.connection.update({
-      where: { id: connection.id },
-      data: { lastSync: new Date() }
-    });
-    
-    const successCount = results.filter(r => r.status === 'success').length;
-    const errorCount = results.filter(r => r.status === 'error').length;
-    
-    res.json({
-      success: true,
-      message: `Inventory sync complete: ${successCount} synced, ${errorCount} errors`,
-      results
-    });
-    
-  } catch (error) {
-    console.error('Inventory sync failed:', error);
-    res.status(500).json({
-      error: 'Inventory sync failed',
       details: error.message
     });
   }

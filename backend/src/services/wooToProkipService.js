@@ -3,13 +3,11 @@
  * Real-time stock deduction when WooCommerce orders are placed
  */
 
-const axios = require('axios');
 const prisma = require('../lib/prisma');
-const { decryptCredentials } = require('./storeService');
+const prokipEcomClient = require('./prokipEcomClient');
 
 class WooCommerceToProkipService {
   constructor() {
-    this.PROKIP_BASE = process.env.PROKIP_API + '/connector/api/';
     this.MAX_RETRIES = 3;
     this.RETRY_DELAY = 1000;
   }
@@ -41,19 +39,16 @@ class WooCommerceToProkipService {
 
       console.log(`📦 Processing order ${orderData.id} for user ${connection.userId}`);
       
-      // Map WooCommerce order items to Prokip format
-      const stockDeductions = await this.mapOrderToStockDeduction(orderData, prokipConfig);
-      
-      if (stockDeductions.length === 0) {
-        console.log('⚠️ No items found for stock deduction');
-        return { success: true, message: 'No items to process' };
-      }
-
-      // Deduct stock from Prokip
-      const result = await this.deductStockFromProkip(stockDeductions, prokipConfig);
+      // Trigger Prokip-2 sync-orders (single pipeline)
+      const result = await prokipEcomClient.syncOrders({
+        store_id: connection.id,
+        status: orderData.status || 'processing',
+        limit: 1,
+        page: 1
+      }, connection.userId);
       
       // Log the transaction
-      await this.logStockTransaction(orderData, stockDeductions, connectionId, result);
+      await this.logStockTransaction(orderData, [], connectionId, result);
       
       console.log('✅ Stock deduction completed successfully');
       return result;
@@ -148,67 +143,10 @@ class WooCommerceToProkipService {
   }
 
   /**
-   * Deduct stock from Prokip using the stock-deduct endpoint
+   * Deduct stock directly is disabled in /api/ecom mode.
    */
-  async deductStockFromProkip(deductions, prokipConfig) {
-    const payload = {
-      business_id: prokipConfig.userId,
-      location_id: prokipConfig.locationId,
-      transaction_date: new Date().toISOString(),
-      reference_type: 'woocommerce_order',
-      reference_id: `WC_ORDER_${Date.now()}`,
-      products: deductions.map(item => ({
-        variation_id: item.variation_id,
-        quantity: item.quantity,
-        unit_price: item.unit_price
-      })),
-      notes: `Stock deduction from WooCommerce order - ${deductions.length} items`
-    };
-
-    console.log('📤 Sending stock deduction to Prokip:', payload);
-
-    const headers = {
-      'Authorization': `Bearer ${prokipConfig.token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    };
-
-    let lastError;
-    
-    for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
-      try {
-        console.log(`🔄 Attempt ${attempt}/${this.MAX_RETRIES} to deduct stock...`);
-        
-        const response = await axios.post(
-          this.PROKIP_BASE + 'stock-deduct',
-          payload,
-          { 
-            headers,
-            timeout: 30000
-          }
-        );
-
-        console.log('✅ Stock deduction successful:', response.data);
-        
-        return {
-          success: true,
-          data: response.data,
-          deductions: deductions,
-          attempt: attempt
-        };
-        
-      } catch (error) {
-        lastError = error;
-        console.error(`❌ Attempt ${attempt} failed:`, error.response?.data || error.message);
-        
-        if (attempt < this.MAX_RETRIES) {
-          console.log(`⏳ Retrying in ${this.RETRY_DELAY}ms...`);
-          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
-        }
-      }
-    }
-    
-    throw new Error(`Stock deduction failed after ${this.MAX_RETRIES} attempts: ${lastError.message}`);
+  async deductStockFromProkip() {
+    throw new Error('Direct stock deduction disabled. Use /api/ecom/sync-orders.');
   }
 
   /**

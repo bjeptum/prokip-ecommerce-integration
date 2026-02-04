@@ -6,8 +6,8 @@
  * Implements idempotency and proper error handling
  */
 
-const { mapWooOrderToProkipStock, shouldReduceStock } = require('./wooToProkipStockMapper');
-const { recordSale } = require('./prokipService');
+const { shouldReduceStock } = require('./wooToProkipStockMapper');
+const prokipEcomClient = require('./prokipEcomClient');
 const prisma = require('../lib/prisma');
 
 /**
@@ -88,86 +88,51 @@ async function handleWooCommerceInventorySync(wooOrder, webhookHeaders, userId =
       };
     }
 
-    // STEP 4: Get Prokip configuration
-    const prokipConfig = await prisma.prokipConfig.findFirst({
-      where: { userId: userId || connection.userId }
-    });
+    // STEP 4: Trigger Prokip-2 sync-orders (single pipeline)
+    console.log(`📦 Triggering Prokip-2 sync-orders for order ${orderId}...`);
+    const prokipResponse = await prokipEcomClient.syncOrders({
+      store_id: connection.id,
+      status: wooOrder.status || 'processing',
+      limit: 1,
+      page: 1
+    }, userId || connection.userId);
 
-    if (!prokipConfig || !prokipConfig.locationId) {
-      console.log(`❌ No Prokip configuration found for user ${userId || connection.userId}`);
-      return {
-        success: false,
-        action: 'error',
-        reason: 'No Prokip configuration found',
+    if (!prokipResponse || prokipResponse.success === false) {
+      console.log(`❌ Failed to sync order ${orderId} via Prokip-2:`, prokipResponse?.error);
+
+      await logInventoryError(
+        connection.id,
         orderId,
-        userId: userId || connection.userId
-      };
-    }
-
-    console.log(`✅ Using Prokip location: ${prokipConfig.locationId}`);
-
-    // STEP 5: Map order to Prokip stock payload
-    const stockPayload = mapWooOrderToProkipStock(wooOrder, prokipConfig.locationId);
-    
-    if (!stockPayload) {
-      console.log(`❌ Failed to map order ${orderId} to Prokip stock payload`);
-      return {
-        success: false,
-        action: 'error',
-        reason: 'Failed to map order to Prokip stock payload',
-        orderId
-      };
-    }
-
-    // STEP 6: Record sale in Prokip (reduces stock)
-    console.log(`📦 Recording sale in Prokip for order ${orderId}...`);
-    
-    const saleData = {
-      locationId: prokipConfig.locationId,
-      contactId: 1,
-      transactionDate: stockPayload.transaction_date,
-      invoiceNo: stockPayload.invoice_no,
-      total: stockPayload.final_total,
-      discount: stockPayload.discount_amount,
-      sells: stockPayload.sells
-    };
-
-    const prokipResponse = await recordSale(saleData, userId || connection.userId);
-
-    if (!prokipResponse || !prokipResponse.success) {
-      console.log(`❌ Failed to record sale in Prokip for order ${orderId}:`, prokipResponse?.error);
-      
-      // Log error for tracking
-      await logInventoryError(connection.id, orderId, 'prokip_sale_failed', 
-        `Failed to record sale in Prokip: ${prokipResponse?.error || 'Unknown error'}`, 
-        { stockPayload, prokipResponse });
+        'prokip_sync_failed',
+        `Failed to sync order via Prokip-2: ${prokipResponse?.error || 'Unknown error'}`,
+        { prokipResponse }
+      );
 
       return {
         success: false,
         action: 'error',
-        reason: 'Failed to record sale in Prokip',
+        reason: 'Failed to sync order via Prokip-2',
         orderId,
         error: prokipResponse?.error
       };
     }
 
-    // STEP 7: Record successful processing in SalesLog
+    // STEP 5: Record successful processing in SalesLog
     const salesLog = await prisma.salesLog.create({
       data: {
         connectionId: connection.id,
-        locationId: prokipConfig.locationId,
         orderId: orderId,
         orderNumber: wooOrder.number?.toString(),
-        invoiceNo: stockPayload.invoice_no,
+        invoiceNo: `WOO-${orderId}`,
         platform: 'woocommerce',
         customerName: wooOrder.billing?.first_name && wooOrder.billing?.last_name ? 
           `${wooOrder.billing.first_name} ${wooOrder.billing.last_name}` : 
           wooOrder.billing?.email || 'Unknown',
         customerEmail: wooOrder.billing?.email,
-        totalAmount: stockPayload.final_total,
+        totalAmount: parseFloat(wooOrder.total || 0),
         status: wooOrder.status,
         orderDate: new Date(wooOrder.date_created || Date.now()),
-        prokipSellId: prokipResponse.data?.id?.toString(),
+        prokipSellId: null,
         stockDeducted: true,
         wooOrderData: JSON.stringify(wooOrder),
         prokipResponse: JSON.stringify(prokipResponse)
@@ -176,19 +141,17 @@ async function handleWooCommerceInventorySync(wooOrder, webhookHeaders, userId =
 
     console.log(`✅ Successfully processed order ${orderId}:`);
     console.log(`  - SalesLog ID: ${salesLog.id}`);
-    console.log(`  - Prokip Sell ID: ${prokipResponse.data?.id}`);
-    console.log(`  - Items processed: ${stockPayload.sells.length}`);
-    console.log(`  - Total quantity: ${stockPayload.total_quantity}`);
+    console.log(`  - Prokip Sync Result: ${prokipResponse.message || 'OK'}`);
 
     return {
       success: true,
       action: 'processed',
       orderId,
       salesLogId: salesLog.id,
-      prokipSellId: prokipResponse.data?.id,
-      itemsProcessed: stockPayload.sells.length,
-      totalQuantity: stockPayload.total_quantity,
-      totalAmount: stockPayload.final_total
+      prokipSellId: null,
+      itemsProcessed: wooOrder.line_items?.length || 0,
+      totalQuantity: wooOrder.line_items?.reduce((sum, item) => sum + (parseInt(item.quantity) || 0), 0) || 0,
+      totalAmount: parseFloat(wooOrder.total || 0)
     };
 
   } catch (error) {

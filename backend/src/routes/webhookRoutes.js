@@ -1,7 +1,8 @@
 const express = require('express');
 const crypto = require('crypto');
 const bodyParser = require('body-parser');
-const { processStoreToProkip } = require('../services/syncService');
+const prokipEcomClient = require('../services/prokipEcomClient');
+const { shouldReduceStock } = require('../services/wooToProkipStockMapper');
 const { PrismaClient } = require('@prisma/client');
 
 const router = express.Router();
@@ -20,7 +21,21 @@ router.post('/shopify', bodyParser.raw({ type: 'application/json' }), (req, res)
   if (generatedHmac !== hmac) return res.status(401).send('Invalid HMAC');
 
   const data = JSON.parse(req.body.toString());
-  processStoreToProkip(shop, topic, data, 'shopify');
+  try {
+    const connection = await prisma.connection.findFirst({
+      where: { storeUrl: shop, platform: 'shopify' }
+    });
+
+    if (connection) {
+      await prokipEcomClient.syncOrders({
+        store_id: connection.id,
+        limit: 1,
+        page: 1
+      }, connection.userId);
+    }
+  } catch (error) {
+    console.error('Shopify webhook sync failed:', error.message);
+  }
 
   res.status(200).send('OK');
 });
@@ -133,7 +148,17 @@ router.post('/woocommerce', express.json({ limit: '10mb' }), async (req, res) =>
           userId = processingConnection.userId;
         }
         
-        await processStoreToProkip(storeUrl, topic, req.body, 'woocommerce', userId);
+        if (!shouldReduceStock(req.body)) {
+          console.log(`⏭️ Order ${req.body?.id} not eligible for stock reduction, skipping Prokip-2 sync`);
+          return;
+        }
+
+        await prokipEcomClient.syncOrders({
+          store_id: processingConnection.id,
+          status: req.body?.status || 'processing',
+          limit: 1,
+          page: 1
+        }, userId);
         console.log('✅ Webhook processed successfully');
         
         // Mark webhook as processed
