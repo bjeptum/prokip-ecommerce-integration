@@ -5,7 +5,7 @@
  * Fully testable in isolation
  * 
  * Maps WooCommerce order data to Prokip stock reduction payload
- * Following mapping priority: variation_id > product_id > sku
+ * Following mapping priority: sku > variation_id > product_id
  */
 
 /**
@@ -46,12 +46,16 @@ function mapWooOrderToProkipStock(wooOrder, locationId) {
       continue;
     }
 
-    // Product identifier mapping priority: variation_id > product_id > sku
+    // Product identifier mapping priority: sku > variation_id > product_id
     let productId = null;
     let identifier = null;
     let identifierType = null;
 
-    if (lineItem.variation_id && lineItem.variation_id > 0) {
+    if (lineItem.sku && lineItem.sku.trim()) {
+      productId = lineItem.sku.trim();
+      identifier = productId;
+      identifierType = 'sku';
+    } else if (lineItem.variation_id && lineItem.variation_id > 0) {
       productId = lineItem.variation_id.toString();
       identifier = productId;
       identifierType = 'variation_id';
@@ -59,10 +63,6 @@ function mapWooOrderToProkipStock(wooOrder, locationId) {
       productId = lineItem.product_id.toString();
       identifier = productId;
       identifierType = 'product_id';
-    } else if (lineItem.sku && lineItem.sku.trim()) {
-      productId = lineItem.sku.trim();
-      identifier = productId;
-      identifierType = 'sku';
     }
 
     if (!productId) {

@@ -3,13 +3,14 @@ const crypto = require('crypto');
 const bodyParser = require('body-parser');
 const prokipEcomClient = require('../services/prokipEcomClient');
 const { shouldReduceStock } = require('../services/wooToProkipStockMapper');
+const { handleWooCommerceInventorySync } = require('../services/wooInventorySyncService');
 const { PrismaClient } = require('@prisma/client');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
 // Shopify webhook endpoint (public)
-router.post('/shopify', bodyParser.raw({ type: 'application/json' }), (req, res) => {
+router.post('/shopify', bodyParser.raw({ type: 'application/json' }), async (req, res) => {
   const hmac = req.headers['x-shopify-hmac-sha256'];
   const topic = req.headers['x-shopify-topic'];
   const shop = req.headers['x-shopify-shop-domain'];
@@ -153,13 +154,19 @@ router.post('/woocommerce', express.json({ limit: '10mb' }), async (req, res) =>
           return;
         }
 
-        await prokipEcomClient.syncOrders({
-          store_id: processingConnection.id,
-          status: req.body?.status || 'processing',
-          limit: 1,
-          page: 1
-        }, userId);
-        console.log('✅ Webhook processed successfully');
+        const syncResult = await handleWooCommerceInventorySync(
+          req.body,
+          req.headers,
+          userId
+        );
+
+        if (syncResult?.success) {
+          console.log('✅ Webhook processed successfully');
+        } else if (syncResult?.action === 'skipped') {
+          console.log(`ℹ️ Webhook skipped: ${syncResult.reason || 'Not eligible'}`);
+        } else {
+          console.log(`❌ Webhook sync failed: ${syncResult?.error || 'Unknown error'}`);
+        }
         
         // Mark webhook as processed
         try {

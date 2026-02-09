@@ -1,4 +1,6 @@
 const prisma = require('../lib/prisma');
+const { getWooProducts } = require('./wooService');
+const { decryptCredentials, updateInventoryInStore } = require('./storeService');
 
 /**
  * Record a sale in Prokip with platform prefix
@@ -7,7 +9,7 @@ const prisma = require('../lib/prisma');
  */
 async function recordSaleWithPrefix(saleData) {
   try {
-    const { platform, products, total, locationId, customerId } = saleData;
+    const { platform, products, total, locationId, customerId, userId } = saleData;
     
     // Generate invoice number with platform prefix
     const prefixMap = {
@@ -73,11 +75,17 @@ async function recordSaleWithPrefix(saleData) {
 
     console.log(`✅ Sale recorded with prefix: ${invoiceNo}`);
     
+    let wooSync = null;
+    if (platform && platform.toLowerCase() === 'prokip') {
+      wooSync = await syncProkipSaleToWoo(products, userId);
+    }
+
     return {
       success: true,
       invoice_no: invoiceNo,
       platform,
       total,
+      woo_sync: wooSync,
       message: `Sale recorded successfully from ${platform}`
     };
     
@@ -85,6 +93,97 @@ async function recordSaleWithPrefix(saleData) {
     console.error('Failed to record sale:', error);
     throw new Error(`Could not record sale: ${error.message}`);
   }
+}
+
+/**
+ * After a Prokip sale, reduce stock in connected WooCommerce stores.
+ * @param {Array} products - [{ sku, quantity }...]
+ * @param {number} userId - Owning user
+ */
+async function syncProkipSaleToWoo(products = [], userId = null) {
+  if (!Array.isArray(products) || products.length === 0) {
+    return { success: false, reason: 'No products to sync' };
+  }
+
+  const connections = await prisma.connection.findMany({
+    where: {
+      platform: 'woocommerce',
+      ...(userId ? { userId } : {})
+    }
+  });
+
+  if (!connections.length) {
+    return { success: false, reason: 'No WooCommerce connections for user' };
+  }
+
+  const skuTotals = new Map();
+  products.forEach((p) => {
+    const sku = (p?.sku || p?.id || '').toString().trim();
+    const qty = Number.parseFloat(p?.quantity || 0);
+    if (!sku || !Number.isFinite(qty) || qty <= 0) return;
+    skuTotals.set(sku.toLowerCase(), (skuTotals.get(sku.toLowerCase()) || 0) + qty);
+  });
+
+  const results = [];
+
+  for (const connection of connections) {
+    let consumerKey, consumerSecret;
+    try {
+      ({ consumerKey, consumerSecret } = decryptCredentials(connection));
+    } catch (err) {
+      results.push({ connectionId: connection.id, storeUrl: connection.storeUrl, success: false, error: 'decrypt_failed' });
+      continue;
+    }
+
+    for (const [skuKey, qtySold] of skuTotals.entries()) {
+      try {
+        const wooProducts = await getWooProducts(
+          connection.storeUrl,
+          consumerKey,
+          consumerSecret,
+          connection.oauthToken,
+          connection.oauthSecret,
+          connection.wooUsername,
+          connection.wooAppPassword,
+          { sku: skuKey, per_page: 1, status: 'any' }
+        );
+
+        const wooProduct = Array.isArray(wooProducts) ? wooProducts[0] : null;
+        if (!wooProduct) {
+          results.push({ connectionId: connection.id, storeUrl: connection.storeUrl, sku: skuKey, success: false, error: 'not_found' });
+          continue;
+        }
+
+        const currentStock = Number.parseFloat(wooProduct.stock_quantity ?? 0) || 0;
+        const newStock = Math.max(0, currentStock - qtySold);
+        await updateInventoryInStore(connection, wooProduct.sku || skuKey, newStock);
+
+        results.push({
+          connectionId: connection.id,
+          storeUrl: connection.storeUrl,
+          sku: wooProduct.sku || skuKey,
+          success: true,
+          previous: currentStock,
+          newStock
+        });
+      } catch (err) {
+        results.push({
+          connectionId: connection.id,
+          storeUrl: connection.storeUrl,
+          sku: skuKey,
+          success: false,
+          error: err.message
+        });
+      }
+    }
+  }
+
+  const successCount = results.filter(r => r.success).length;
+  return {
+    success: successCount > 0,
+    updated: successCount,
+    results
+  };
 }
 
 /**

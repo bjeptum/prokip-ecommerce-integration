@@ -4,6 +4,13 @@
  */
 
 class WooCommerceToProkipMapper {
+  constructor(options = {}) {
+    this.skuMap = options.skuMap || null;
+  }
+
+  setSkuMap(map) {
+    this.skuMap = map;
+  }
   /**
    * Map WooCommerce order to Prokip E-commerce API format
    * Matches Laravel controller's $request->only(['products', 'customer_id', 'addresses'])
@@ -105,6 +112,13 @@ class WooCommerceToProkipMapper {
    * @returns {string|null} - variation_id
    */
   extractVariationId(item) {
+    const skuKey = (item?.sku || '').toString().trim().toLowerCase();
+
+    // Method 0: Use SKU mapping from Prokip catalog first
+    if (this.skuMap && skuKey && this.skuMap.has(skuKey)) {
+      return this.skuMap.get(skuKey).toString();
+    }
+
     // Method 1: Use SKU directly if it's numeric (variation_id)
     if (item.sku && /^\d+$/.test(item.sku)) {
       return item.sku;

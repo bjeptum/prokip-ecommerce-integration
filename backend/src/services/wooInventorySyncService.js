@@ -7,8 +7,15 @@
  */
 
 const { shouldReduceStock } = require('./wooToProkipStockMapper');
-const prokipEcomClient = require('./prokipEcomClient');
+const { syncWooOrderToProkip, invalidateSkuMapForUser } = require('./prokipEcomOrderSyncService');
 const prisma = require('../lib/prisma');
+const { getWooProducts } = require('./wooService');
+const prokipLocalAuthService = require('./prokipLocalAuthService');
+const { decryptCredentials } = require('./storeService');
+
+function normalizeKey(value) {
+  return (value || '').toString().trim().toLowerCase();
+}
 
 /**
  * Handle WooCommerce order webhook for inventory synchronization
@@ -41,18 +48,48 @@ async function handleWooCommerceInventorySync(wooOrder, webhookHeaders, userId =
       };
     }
 
-    // STEP 2: Find connection for this store
+    // STEP 2: Find connection for this store (prefer the calling user)
     let connection = null;
     if (source) {
+      const sourceTrimmed = source.toString().trim().replace(/\/+$/, '');
+      const candidates = Array.from(new Set([source.toString().trim(), sourceTrimmed]));
+
       connection = await prisma.connection.findFirst({
-        where: { storeUrl: source }
+        where: {
+          ...(userId ? { userId } : {}),
+          OR: candidates.map((value) => ({ storeUrl: value }))
+        }
       });
+
+      if (!connection) {
+        try {
+          const withScheme = sourceTrimmed.startsWith('http') ? sourceTrimmed : `https://${sourceTrimmed}`;
+          const url = new URL(withScheme);
+          const origin = url.origin.toLowerCase();
+          const hostname = url.hostname.toLowerCase();
+
+          connection = await prisma.connection.findFirst({
+            where: {
+              ...(userId ? { userId } : {}),
+              OR: [
+                { storeUrl: { startsWith: origin } },
+                { storeUrl: { contains: hostname } }
+              ]
+            }
+          });
+        } catch {
+          // ignore URL parse errors
+        }
+      }
     }
 
     if (!connection) {
-      // Fallback to any WooCommerce connection
+      // Fallback to any WooCommerce connection (prefer the calling user)
       connection = await prisma.connection.findFirst({
-        where: { platform: 'woocommerce' }
+        where: {
+          ...(userId ? { userId } : {}),
+          platform: 'woocommerce'
+        }
       });
     }
 
@@ -88,34 +125,35 @@ async function handleWooCommerceInventorySync(wooOrder, webhookHeaders, userId =
       };
     }
 
-    // STEP 4: Trigger Prokip-2 sync-orders (single pipeline)
-    console.log(`📦 Triggering Prokip-2 sync-orders for order ${orderId}...`);
-    const prokipResponse = await prokipEcomClient.syncOrders({
-      store_id: connection.id,
-      status: wooOrder.status || 'processing',
-      limit: 1,
-      page: 1
-    }, userId || connection.userId);
+    // STEP 4: Send order to Prokip via /api/ecom/orders
+    console.log(`📦 Sending order ${orderId} to Prokip /api/ecom/orders...`);
+    let prokipResult = await syncWooOrderToProkip(
+      wooOrder,
+      connection,
+      userId || connection.userId
+    );
 
-    if (!prokipResponse || prokipResponse.success === false) {
-      console.log(`❌ Failed to sync order ${orderId} via Prokip-2:`, prokipResponse?.error);
+    if (!prokipResult || prokipResult.success === false) {
+      console.log(`❌ Failed to sync order ${orderId} via /api/ecom/orders:`, prokipResult?.error);
 
       await logInventoryError(
         connection.id,
         orderId,
         'prokip_sync_failed',
-        `Failed to sync order via Prokip-2: ${prokipResponse?.error || 'Unknown error'}`,
-        { prokipResponse }
+        `Failed to sync order via /api/ecom/orders: ${prokipResult?.error || 'Unknown error'}`,
+        { prokipResult }
       );
 
       return {
         success: false,
         action: 'error',
-        reason: 'Failed to sync order via Prokip-2',
+        reason: 'Failed to sync order via /api/ecom/orders',
         orderId,
-        error: prokipResponse?.error
+        error: prokipResult?.error
       };
     }
+
+    const prokipResponse = prokipResult.response || prokipResult;
 
     // STEP 5: Record successful processing in SalesLog
     const salesLog = await prisma.salesLog.create({
@@ -133,9 +171,7 @@ async function handleWooCommerceInventorySync(wooOrder, webhookHeaders, userId =
         status: wooOrder.status,
         orderDate: new Date(wooOrder.date_created || Date.now()),
         prokipSellId: null,
-        stockDeducted: true,
-        wooOrderData: JSON.stringify(wooOrder),
-        prokipResponse: JSON.stringify(prokipResponse)
+        stockDeducted: true
       }
     });
 

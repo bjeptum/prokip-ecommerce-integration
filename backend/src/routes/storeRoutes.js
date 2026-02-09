@@ -77,6 +77,33 @@ function decryptCredentials(connection) {
   return { consumerKey, consumerSecret };
 }
 
+function decryptAppPassword(connection) {
+  let appPassword = connection.wooAppPassword;
+
+  // Application passwords are stored encrypted; decrypt if needed
+  if (appPassword && typeof appPassword === 'string' && appPassword.startsWith('{"encrypted":')) {
+    try {
+      const encryptedData = JSON.parse(appPassword);
+      appPassword = wooSecureService.decrypt(encryptedData);
+      console.log('✅ Application Password decrypted successfully');
+    } catch (error) {
+      console.error('❌ Failed to decrypt Application Password:', error.message);
+      throw new Error('Failed to decrypt Application Password');
+    }
+  } else if (appPassword && typeof appPassword === 'object' && appPassword.encrypted) {
+    // Already parsed object
+    try {
+      appPassword = wooSecureService.decrypt(appPassword);
+      console.log('✅ Application Password decrypted successfully');
+    } catch (error) {
+      console.error('❌ Failed to decrypt Application Password:', error.message);
+      throw new Error('Failed to decrypt Application Password');
+    }
+  }
+
+  return appPassword;
+}
+
 /**
  * Find working Consumer Key connection for the same domain
  */
@@ -132,63 +159,61 @@ async function findWorkingConsumerKey(storeUrl) {
  */
 async function fetchWooCommerceOrders(connection) {
   let lastError = null;
-  
+  let appPassword = null;
+
+  // Decrypt Application Password if it is stored encrypted
+  try {
+    appPassword = decryptAppPassword(connection);
+  } catch (error) {
+    lastError = error;
+  }
+
   // Strategy 1: Try Application Password first
-  if (connection.wooUsername && connection.wooAppPassword) {
-    console.log('🔐 Strategy 1: Using Application Password for orders');
-    
+  if (connection.wooUsername && appPassword) {
+    console.log('Strategy 1: Using Application Password for orders');
     try {
-      // Test if Application Password has WooCommerce permissions
       const capabilityCheck = await wooSimpleAppPassword.checkWooCommerceCapabilities(
         connection.storeUrl,
         connection.wooUsername,
-        connection.wooAppPassword
+        appPassword
       );
-      
       if (capabilityCheck.success) {
-        console.log('✅ Application Password has WooCommerce permissions for orders');
-        
-        // Fetch orders using Application Password
         const rawOrders = await getWooOrders(
           connection.storeUrl,
           null, null, null, null,
           connection.wooUsername,
-          connection.wooAppPassword
+          appPassword
         );
-        
-        console.log(`✅ Application Password successful for orders: ${rawOrders.length} orders`);
+        console.log(`Application Password successful for orders: ${rawOrders.length} orders`);
         return rawOrders;
-      } else {
-        console.log('❌ Application Password lacks WooCommerce permissions for orders');
-        console.log(`Issue: ${capabilityCheck.issue}`);
-        console.log(`Message: ${capabilityCheck.message}`);
-        lastError = new Error(capabilityCheck.message);
       }
+      console.log('Application Password lacks WooCommerce permissions for orders');
+      lastError = new Error(capabilityCheck.message || 'WooCommerce permissions missing');
+      lastError.status = capabilityCheck.status || 403;
+      lastError.code = capabilityCheck.issue || capabilityCheck.code;
     } catch (error) {
-      console.log('❌ Application Password failed for orders:', error.message);
+      console.log('Application Password failed for orders:', error.message);
       lastError = error;
     }
   }
-  
+
   // Strategy 2: Try Consumer Key/Secret if available
   if (connection.consumerKey && connection.consumerSecret) {
-    console.log('🔑 Strategy 2: Using Consumer Key/Secret for orders');
-    
+    console.log('Strategy 2: Using Consumer Key/Secret for orders');
+    let consumerKey = null;
+    let consumerSecret = null;
     try {
-      // Decrypt credentials before using them
-      const { consumerKey, consumerSecret } = decryptCredentials(connection);
-      
+      ({ consumerKey, consumerSecret } = decryptCredentials(connection));
       const rawOrders = await getWooOrders(
         connection.storeUrl,
         consumerKey,
         consumerSecret
       );
-      
-      console.log(`✅ Consumer Key/Secret successful for orders: ${rawOrders.length} orders`);
+      console.log(`Consumer Key/Secret successful for orders: ${rawOrders.length} orders`);
       return rawOrders;
     } catch (error) {
-      console.log('❌ Consumer Key/Secret failed for orders:', error.message);
-      console.log('❌ Full error details:', {
+      console.log('Consumer Key/Secret failed for orders:', error.message);
+      console.log('Full error details:', {
         storeUrl: connection.storeUrl,
         consumerKey: consumerKey ? 'present' : 'missing',
         consumerSecret: consumerSecret ? 'present' : 'missing',
@@ -199,129 +224,138 @@ async function fetchWooCommerceOrders(connection) {
       lastError = error;
     }
   }
-  
+
   // Strategy 3: Fallback to working Consumer Key from same domain
-  console.log('🔄 Strategy 3: Looking for working Consumer Key fallback for orders');
+  console.log('Strategy 3: Looking for working Consumer Key fallback for orders');
   const fallbackConnection = await findWorkingConsumerKey(connection.storeUrl);
-  
   if (fallbackConnection) {
-    console.log(`🔄 Using fallback Consumer Key for orders: ${fallbackConnection.storeUrl}`);
-    
+    console.log(`Using fallback Consumer Key for orders: ${fallbackConnection.storeUrl}`);
     try {
-      // Decrypt fallback credentials before using them
       const { consumerKey, consumerSecret } = decryptCredentials(fallbackConnection);
-      
       const rawOrders = await getWooOrders(
         fallbackConnection.storeUrl,
         consumerKey,
         consumerSecret
       );
-      
-      console.log(`✅ Fallback successful for orders: ${rawOrders.length} orders`);
+      console.log(`Fallback successful for orders: ${rawOrders.length} orders`);
       return rawOrders;
     } catch (error) {
-      console.log('❌ Fallback failed for orders:', error.message);
+      console.log('Fallback failed for orders:', error.message);
       lastError = error;
     }
   } else {
-    console.log('❌ No working Consumer Key fallback found for orders');
+    console.log('No working Consumer Key fallback found for orders');
   }
-  
-  // All strategies failed
-  console.log('❌ All authentication strategies failed for orders');
+
+  console.log('All authentication strategies failed for orders');
   throw lastError || new Error('Unable to fetch orders with any available authentication method');
 }
+
 async function fetchWooCommerceProducts(connection) {
   let lastError = null;
-  
+  let lastConsumerKey = null;
+  let lastConsumerSecret = null;
+  let appPassword = null;
+
+  // Decrypt Application Password if stored encrypted
+  try {
+    appPassword = decryptAppPassword(connection);
+  } catch (error) {
+    lastError = error;
+  }
+
   // Strategy 1: Try Application Password first
-  if (connection.wooUsername && connection.wooAppPassword) {
-    console.log('🔐 Strategy 1: Using Application Password');
-    
+  if (connection.wooUsername && appPassword) {
+    console.log('Strategy 1: Using Application Password');
     try {
-      // Test if Application Password has WooCommerce permissions
       const capabilityCheck = await wooSimpleAppPassword.checkWooCommerceCapabilities(
         connection.storeUrl,
         connection.wooUsername,
-        connection.wooAppPassword
+        appPassword
       );
-      
+
       if (capabilityCheck.success) {
-        console.log('✅ Application Password has WooCommerce permissions');
-        
-        // Fetch products using Application Password
         const rawProducts = await getWooProducts(
           connection.storeUrl,
           null, null, null, null,
           connection.wooUsername,
-          connection.wooAppPassword
+          appPassword
         );
-        
-        console.log(`✅ Application Password successful: ${rawProducts.length} products`);
-        return rawProducts;
-      } else {
-        console.log('❌ Application Password lacks WooCommerce permissions');
-        console.log(`Issue: ${capabilityCheck.issue}`);
-        console.log(`Message: ${capabilityCheck.message}`);
-        lastError = new Error(capabilityCheck.message);
+        const sorted = [...rawProducts].sort((a, b) => {
+          const aq = Number.parseFloat(a.stock_quantity ?? 0);
+          const bq = Number.parseFloat(b.stock_quantity ?? 0);
+          if (!Number.isNaN(bq) && !Number.isNaN(aq) && bq !== aq) return bq - aq;
+          return (a.name || '').localeCompare(b.name || '');
+        });
+        console.log(`Application Password successful: ${sorted.length} products`);
+        return sorted;
       }
+
+      lastError = new Error(capabilityCheck.message || 'WooCommerce permissions missing');
+      lastError.status = capabilityCheck.status || 403;
+      lastError.code = capabilityCheck.issue || capabilityCheck.code;
     } catch (error) {
-      console.log('❌ Application Password failed:', error.message);
+      console.log('Application Password failed:', error.message);
       lastError = error;
     }
   }
-  
+
   // Strategy 2: Try Consumer Key/Secret if available
   if (connection.consumerKey && connection.consumerSecret) {
-    console.log('🔑 Strategy 2: Using Consumer Key/Secret');
-    
+    console.log('Strategy 2: Using Consumer Key/Secret');
     try {
-      // Decrypt credentials before using them
-      const { consumerKey, consumerSecret } = decryptCredentials(connection);
-      
+      ({ consumerKey: lastConsumerKey, consumerSecret: lastConsumerSecret } = decryptCredentials(connection));
+
       const rawProducts = await getWooProducts(
         connection.storeUrl,
-        consumerKey,
-        consumerSecret
+        lastConsumerKey,
+        lastConsumerSecret
       );
-      
-      console.log(`✅ Consumer Key/Secret successful: ${rawProducts.length} products`);
-      return rawProducts;
+      const sorted = [...rawProducts].sort((a, b) => {
+        const aq = Number.parseFloat(a.stock_quantity ?? 0);
+        const bq = Number.parseFloat(b.stock_quantity ?? 0);
+        if (!Number.isNaN(bq) && !Number.isNaN(aq) && bq !== aq) return bq - aq;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      console.log(`Consumer Key/Secret successful: ${sorted.length} products`);
+      return sorted;
     } catch (error) {
-      console.log('❌ Consumer Key/Secret failed:', error.message);
+      console.log('Consumer Key/Secret failed:', error.message);
       lastError = error;
     }
   }
-  
+
   // Strategy 3: Fallback to working Consumer Key from same domain
-  console.log('🔄 Strategy 3: Looking for working Consumer Key fallback');
+  console.log('Strategy 3: Looking for working Consumer Key fallback');
   const fallbackConnection = await findWorkingConsumerKey(connection.storeUrl);
-  
+
   if (fallbackConnection) {
-    console.log(`🔄 Using fallback Consumer Key: ${fallbackConnection.storeUrl}`);
-    
+    console.log(`Using fallback Consumer Key: ${fallbackConnection.storeUrl}`);
     try {
-      // Decrypt fallback credentials before using them
-      const { consumerKey, consumerSecret } = decryptCredentials(fallbackConnection);
-      
+      ({ consumerKey: lastConsumerKey, consumerSecret: lastConsumerSecret } = decryptCredentials(fallbackConnection));
+
       const rawProducts = await getWooProducts(
         fallbackConnection.storeUrl,
-        consumerKey,
-        consumerSecret
+        lastConsumerKey,
+        lastConsumerSecret
       );
-      
-      console.log(`✅ Fallback successful: ${rawProducts.length} products`);
-      return rawProducts;
+      const sorted = [...rawProducts].sort((a, b) => {
+        const aq = Number.parseFloat(a.stock_quantity ?? 0);
+        const bq = Number.parseFloat(b.stock_quantity ?? 0);
+        if (!Number.isNaN(bq) && !Number.isNaN(aq) && bq !== aq) return bq - aq;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      console.log(`Fallback successful: ${sorted.length} products`);
+      return sorted;
     } catch (error) {
-      console.log('❌ Fallback failed:', error.message);
+      console.log('Fallback failed:', error.message);
       lastError = error;
     }
   } else {
-    console.log('❌ No working Consumer Key fallback found');
+    console.log('No working Consumer Key fallback found');
   }
-  
-  // All strategies failed
-  console.log('❌ All authentication strategies failed');
+
+  console.log('All authentication strategies failed');
   throw lastError || new Error('Unable to fetch products with any available authentication method');
 }
 
@@ -443,9 +477,12 @@ router.get('/my-store/products', async (req, res) => {
     
   } catch (error) {
     console.error('Error fetching products:', error);
-    res.status(500).json({ 
+    const status = error.status || error.response?.status || (error.message?.toLowerCase().includes('permission') ? 403 : 500);
+    res.status(status).json({ 
       error: 'Failed to fetch products',
-      details: error.message 
+      message: error.message,
+      code: error.code || error.response?.data?.code,
+      details: error.response?.data || error.details || null
     });
   }
 });
@@ -555,9 +592,12 @@ router.get('/my-store/orders', async (req, res) => {
     
   } catch (error) {
     console.error('Error fetching orders:', error);
-    res.status(500).json({ 
+    const status = error.status || error.response?.status || (error.message?.toLowerCase().includes('permission') ? 403 : 500);
+    res.status(status).json({ 
       error: 'Failed to fetch orders',
-      details: error.message 
+      message: error.message,
+      code: error.code || error.response?.data?.code,
+      details: error.response?.data || error.details || null
     });
   }
 });
@@ -574,12 +614,31 @@ router.get('/my-store/analytics', async (req, res) => {
       return res.status(404).json({ error: 'No Prokip configuration found for this user' });
     }
 
-    // Find store connection for current user (either WooCommerce or Shopify)
-    const connection = await prisma.connection.findFirst({
-      where: { 
-        userId: req.userId 
-      }
-    });
+    // Resolve connection from query or fallback to first for user
+    let connectionId = req.query.connectionId ? parseInt(req.query.connectionId) : null;
+    let connection = null;
+
+    if (connectionId) {
+      connection = await prisma.connection.findFirst({
+        where: { id: connectionId, userId: req.userId }
+      });
+    }
+
+    if (!connection) {
+      connection = await prisma.connection.findFirst({
+        where: { userId: req.userId }
+      });
+    }
+
+    if (!connection && process.env.PROKIP_LOCAL_AUTH === 'true' && connectionId) {
+      connection = await prisma.connection.findFirst({
+        where: { id: connectionId }
+      });
+    }
+
+    if (!connection && process.env.PROKIP_LOCAL_AUTH === 'true') {
+      connection = await prisma.connection.findFirst();
+    }
 
     if (!connection) {
       return res.status(404).json({ error: 'No store connections found for this user' });
@@ -593,6 +652,9 @@ router.get('/my-store/analytics', async (req, res) => {
       // Use enhanced WooCommerce product fetching with decryption
       const products = await fetchWooCommerceProducts(connection);
       productCount = products.length;
+    } else if (connection.platform === 'shopify') {
+      const products = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+      productCount = Array.isArray(products) ? products.length : 0;
     }
 
     // Get orders processed from SalesLog - filtered by user and location
@@ -616,9 +678,12 @@ router.get('/my-store/analytics', async (req, res) => {
     
   } catch (error) {
     console.error('Error fetching analytics:', error);
-    res.status(500).json({ 
+    const status = error.status || error.response?.status || (error.message?.toLowerCase().includes('permission') ? 403 : 500);
+    res.status(status).json({ 
       error: 'Failed to fetch analytics',
-      details: error.message 
+      message: error.message,
+      code: error.code || error.response?.data?.code,
+      details: error.response?.data || error.details || null
     });
   }
 });

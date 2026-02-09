@@ -51,9 +51,23 @@ const getWooClient = (storeUrl, key = null, secret = null, accessToken = null, a
       'Content-Type': 'application/json',
       'User-Agent': 'Prokip-Integration/1.0'
     },
-    timeout: 15000
+    timeout: 30000
   });
 };
+
+function isAxiosInstance(client) {
+  // axios.create() returns a callable instance with a `defaults` property.
+  return Boolean(client && client.defaults && typeof client.get === 'function');
+}
+
+async function clientGet(client, endpoint, params) {
+  if (isAxiosInstance(client)) {
+    return client.get(endpoint, { params });
+  }
+
+  // Custom clients in this codebase expose (endpoint, params) signature.
+  return client.get(endpoint, params);
+}
 
 /**
  * Register WooCommerce webhooks
@@ -135,7 +149,16 @@ async function registerWooWebhooks(storeUrl, consumerKey = null, consumerSecret 
  * Fetch products
  * Supports OAuth, Basic Auth, and Application Password
  */
-async function getWooProducts(storeUrl, consumerKey = null, consumerSecret = null, accessToken = null, accessTokenSecret = null, username = null, appPassword = null) {
+async function getWooProducts(
+  storeUrl,
+  consumerKey = null,
+  consumerSecret = null,
+  accessToken = null,
+  accessTokenSecret = null,
+  username = null,
+  appPassword = null,
+  options = {}
+) {
   let client;
   
   try {
@@ -151,17 +174,77 @@ async function getWooProducts(storeUrl, consumerKey = null, consumerSecret = nul
       // Use Basic Auth client (Consumer Key/Secret)
       client = getWooClient(storeUrl, consumerKey, consumerSecret);
     }
+
+    const perPageRaw = options?.per_page ?? options?.perPage ?? options?.limit ?? 50;
+    const pageRaw = options?.page ?? 1;
+    const per_page = Math.max(1, Math.min(100, parseInt(perPageRaw, 10) || 50));
+    const page = Math.max(1, parseInt(pageRaw, 10) || 1);
+    const params = { per_page, ...(page > 1 ? { page } : {}) };
+
+    // Support common Woo params needed by sync flows (e.g. include specific IDs).
+    const includeRaw = options?.include ?? options?.includes;
+    if (includeRaw) {
+      params.include = Array.isArray(includeRaw) ? includeRaw.join(',') : includeRaw;
+    }
+
+    const statusRaw = options?.status;
+    if (statusRaw) params.status = statusRaw;
+
+    const skuRaw = options?.sku;
+    if (skuRaw) params.sku = skuRaw;
+
+    const searchRaw = options?.search;
+    if (searchRaw) params.search = searchRaw;
     
-    const { data } = await client.get('products', {
-      params: { per_page: 100 }
-    });
-    return data;
+    try {
+      const response = await clientGet(client, 'products', params);
+      return response.data;
+    } catch (error) {
+      const status = error.response?.status;
+      const shouldRetryWithQueryAuth =
+        !accessToken &&
+        !accessTokenSecret &&
+        !username &&
+        !appPassword &&
+        consumerKey &&
+        consumerSecret &&
+        (status === 401 || status === 403 || status === 400);
+
+      // Some hosts strip the Authorization header; retry with query-string auth.
+      if (shouldRetryWithQueryAuth) {
+        const baseUrl = getWooBaseUrl(storeUrl);
+        const { data } = await axios.get(`${baseUrl}/wp-json/wc/v3/products`, {
+          params: {
+            ...params,
+            consumer_key: consumerKey,
+            consumer_secret: consumerSecret
+          },
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Prokip-Integration/1.0',
+            Accept: 'application/json'
+          },
+          timeout: 30000
+        });
+        return data;
+      }
+
+      throw error;
+    }
   } catch (error) {
     console.error(
       `Woo products fetch failed (${storeUrl}):`,
       error.response?.data || error.message
     );
-    throw new Error('Failed to fetch Woo products');
+
+    const status = error.response?.status;
+    const serverMessage =
+      error.response?.data?.message ||
+      error.response?.data?.code ||
+      (typeof error.response?.data === 'string' ? error.response.data : null);
+    const detail = serverMessage ? ` - ${serverMessage}` : '';
+
+    throw new Error(`Failed to fetch Woo products${status ? ` (HTTP ${status})` : ''}${detail}`);
   }
 }
 
@@ -188,18 +271,102 @@ async function getWooOrders(storeUrl, consumerKey = null, consumerSecret = null,
     
     const params = {
       status: ['completed', 'processing', 'pending', 'on-hold'], // Include more order statuses
-      per_page: 100
+      per_page: 50
     };
     if (after) params.after = after;
 
-    const { data } = await client.get('orders', { params });
-    return data;
+    try {
+      const response = await clientGet(client, 'orders', params);
+      return response.data;
+    } catch (error) {
+      const status = error.response?.status;
+      const shouldRetryWithQueryAuth =
+        !accessToken &&
+        !accessTokenSecret &&
+        !username &&
+        !appPassword &&
+        consumerKey &&
+        consumerSecret &&
+        (status === 401 || status === 403 || status === 400);
+
+      if (shouldRetryWithQueryAuth) {
+        const baseUrl = getWooBaseUrl(storeUrl);
+        const { data } = await axios.get(`${baseUrl}/wp-json/wc/v3/orders`, {
+          params: {
+            ...params,
+            consumer_key: consumerKey,
+            consumer_secret: consumerSecret
+          },
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Prokip-Integration/1.0',
+            Accept: 'application/json'
+          },
+          timeout: 30000
+        });
+        return data;
+      }
+
+      throw error;
+    }
   } catch (error) {
     console.error(
       `Woo orders fetch failed (${storeUrl}):`,
       error.response?.data || error.message
     );
-    throw new Error('Failed to fetch Woo orders');
+
+    const status = error.response?.status;
+    const serverMessage =
+      error.response?.data?.message ||
+      error.response?.data?.code ||
+      (typeof error.response?.data === 'string' ? error.response.data : null);
+    const detail = serverMessage ? ` - ${serverMessage}` : '';
+
+    throw new Error(`Failed to fetch Woo orders${status ? ` (HTTP ${status})` : ''}${detail}`);
+  }
+}
+
+async function testWooConnection(
+  storeUrl,
+  consumerKey = null,
+  consumerSecret = null,
+  accessToken = null,
+  accessTokenSecret = null,
+  username = null,
+  appPassword = null
+) {
+  try {
+    // Prefer application password path when provided
+    if (username && appPassword) {
+      const wooAppPasswordService = require('./wooAppPasswordService');
+      const ok = await wooAppPasswordService.testConnection(storeUrl, username, appPassword);
+      if (ok) {
+        return { success: true, message: 'WooCommerce connection is working', storeInfo: { url: storeUrl } };
+      }
+      return { success: false, message: 'WooCommerce connection test failed', details: 'Application password was rejected' };
+    }
+
+    // Fallback to CK/CS or OAuth
+    await getWooProducts(
+      storeUrl,
+      consumerKey,
+      consumerSecret,
+      accessToken,
+      accessTokenSecret,
+      username,
+      appPassword,
+      { per_page: 1, page: 1 }
+    );
+
+    return { success: true, message: 'WooCommerce connection is working', storeInfo: { url: storeUrl } };
+  } catch (error) {
+    const status = error.response?.status;
+    const detail = error.response?.data?.message || error.response?.data?.error || error.message;
+    return {
+      success: false,
+      message: 'WooCommerce connection test failed',
+      details: `${detail}${status ? ` (HTTP ${status})` : ''}`
+    };
   }
 }
 
@@ -207,5 +374,6 @@ module.exports = {
   registerWooWebhooks,
   getWooProducts,
   getWooOrders,
+  testWooConnection,
   getWooBaseUrl
 };

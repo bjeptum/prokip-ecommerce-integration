@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const { body, validationResult } = require('express-validator');
 const prokipService = require('../services/prokipService');
+const prokipLocalAuthService = require('../services/prokipLocalAuthService');
 
 const router = express.Router();
 
@@ -102,16 +103,53 @@ router.post('/prokip-login', [
     console.log('📧 Username:', username);
     console.log('🔑 Password provided:', password ? '✅ Yes' : '❌ No');
 
-    // Authenticate with Prokip OAuth API (real method)
-    const tokenData = await prokipService.authenticateUser(username, password);
-    
-    const { access_token, refresh_token, expires_in } = tokenData;
+    // Attach Prokip to local user if JWT provided
+    let localUser = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const localToken = authHeader.split(' ')[1];
+      try {
+        const decoded = jwt.verify(localToken, process.env.JWT_SECRET);
+        localUser = await prisma.user.findUnique({ where: { id: decoded.id } });
+      } catch (error) {
+        // fall back to legacy behavior
+      }
+    }
 
+    const useLocalProkip = process.env.PROKIP_LOCAL_AUTH === 'true';
+
+    let access_token;
+    let refresh_token;
+    let expires_in;
+    let locations = [];
+
+    if (useLocalProkip) {
+      const authResult = await prokipLocalAuthService.authenticateUser(username, password);
+      if (!authResult.success) {
+        return res.status(400).json({ 
+          error: authResult.error || 'Invalid Prokip credentials. Please check your email and password.'
+        });
+      }
+
+      const prokipUser = authResult.user;
+      locations = await prokipLocalAuthService.getBusinessLocations(prokipUser.business_id);
+
+      access_token = process.env.PROKIP_ECOM_TOKEN || 'local-token';
+      refresh_token = null;
+      expires_in = 86400;
+    } else {
+      // Authenticate with Prokip OAuth API (real method)
+      const tokenData = await prokipService.authenticateUser(username, password);
+      access_token = tokenData.access_token;
+      refresh_token = tokenData.refresh_token;
+      expires_in = tokenData.expires_in;
+
+      // Get real business locations using the OAuth token
+      locations = await prokipService.getBusinessLocations(access_token);
+    }
+    
     console.log('✅ Prokip OAuth authentication successful!');
     console.log('📦 Access token received:', access_token ? 'present' : 'missing');
-
-    // Get real business locations using the OAuth token
-    const locations = await prokipService.getBusinessLocations(access_token);
     
     console.log('📍 Real business locations loaded:', locations.length);
     locations.forEach((location, index) => {
@@ -119,7 +157,7 @@ router.post('/prokip-login', [
     });
 
     // Create or find user in our system
-    let user = await prisma.user.findUnique({
+    let user = localUser || await prisma.user.findUnique({
       where: { username }
     });
     
@@ -136,13 +174,17 @@ router.post('/prokip-login', [
     }
 
     // Store Prokip config using OAuth token
+    const apiUrl = useLocalProkip
+      ? (process.env.PROKIP_BASE_URL || process.env.PROKIP_API)
+      : process.env.PROKIP_API;
+
     await prisma.prokipConfig.upsert({
       where: { userId: user.id },
       update: {
         token: access_token,
         refreshToken: refresh_token,
         expiresAt: new Date(Date.now() + (expires_in * 1000)),
-        apiUrl: process.env.PROKIP_API,
+        apiUrl,
         locationId: locationId || (locations.length > 0 ? locations[0].id.toString() : '1')
       },
       create: {
@@ -150,7 +192,7 @@ router.post('/prokip-login', [
         token: access_token,
         refreshToken: refresh_token,
         expiresAt: new Date(Date.now() + (expires_in * 1000)),
-        apiUrl: process.env.PROKIP_API,
+        apiUrl,
         locationId: locationId || (locations.length > 0 ? locations[0].id.toString() : '1')
       }
     });
@@ -228,20 +270,34 @@ router.post('/prokip-location', [
   console.log('  - expires_in:', expires_in);
 
   try {
-    // Create or find user based on locationId (using locationId as unique identifier)
-    const uniqueUsername = `prokip_${locationId}`;
-    let user = await prisma.user.findUnique({ where: { username: uniqueUsername } });
-    
+    // Prefer existing local user if authenticated
+    let user = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const localToken = authHeader.split(' ')[1];
+      try {
+        const decoded = jwt.verify(localToken, process.env.JWT_SECRET);
+        user = await prisma.user.findUnique({ where: { id: decoded.id } });
+      } catch (error) {
+        // fall back to legacy behavior
+      }
+    }
+
     if (!user) {
-      // Create new user for this Prokip location
-      const bcrypt = require('bcryptjs');
-      const hashedPassword = await bcrypt.hash(`prokip_${locationId}_${Date.now()}`, 10);
-      user = await prisma.user.create({
-        data: {
-          username: uniqueUsername,
-          password: hashedPassword
-        }
-      });
+      // Legacy flow: create or find user based on locationId
+      const uniqueUsername = `prokip_${locationId}`;
+      user = await prisma.user.findUnique({ where: { username: uniqueUsername } });
+      
+      if (!user) {
+        const bcrypt = require('bcryptjs');
+        const hashedPassword = await bcrypt.hash(`prokip_${locationId}_${Date.now()}`, 10);
+        user = await prisma.user.create({
+          data: {
+            username: uniqueUsername,
+            password: hashedPassword
+          }
+        });
+      }
     }
 
     // Save Prokip config with the correct userId

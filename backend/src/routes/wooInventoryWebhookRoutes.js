@@ -75,7 +75,7 @@ router.post('/inventory', express.json({ limit: '10mb' }), async (req, res) => {
     
     if (source) {
       try {
-        const { prisma } = require('../lib/prisma');
+        const prisma = require('../lib/prisma');
         const connection = await prisma.connection.findFirst({
           where: { storeUrl: source }
         });

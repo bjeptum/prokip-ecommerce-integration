@@ -1,6 +1,7 @@
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 const prisma = require('./lib/prisma');
 const bcrypt = require('bcryptjs');
 const swaggerUi = require('swagger-ui-express');
@@ -155,11 +156,11 @@ const ecomSyncRoutes = require('./routes/ecomSyncRoutes');
 app.use('/api/ecom', ecomSyncRoutes);
 
 // Serve static files (for frontend)
-app.use(express.static('../frontend/public'));
+app.use(express.static(path.join(__dirname, '../../frontend/public')));
 
 // Default route - serve frontend
 app.get('/', (req, res) => {
-  res.sendFile(require('path').join(__dirname, '../frontend/public/index.html'));
+  res.sendFile(path.join(__dirname, '../../frontend/public/index.html'));
 });
 
 // Error handling middleware

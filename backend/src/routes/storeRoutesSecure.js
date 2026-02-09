@@ -486,7 +486,12 @@ router.get('/:id/analytics', async (req, res) => {
         const products = await getShopifyProducts(connection.storeUrl, connection.accessToken);
         productCount = products.length;
       } else if (connection.platform === 'woocommerce') {
-        const products = await getWooProducts(connection.storeUrl, connection.consumerKey, connection.consumerSecret);
+        if (!connection.consumerKey || !connection.consumerSecret) {
+          throw new Error('Missing WooCommerce credentials');
+        }
+        const consumerKey = wooSecureService.decrypt(JSON.parse(connection.consumerKey));
+        const consumerSecret = wooSecureService.decrypt(JSON.parse(connection.consumerSecret));
+        const products = await getWooProducts(connection.storeUrl, consumerKey, consumerSecret);
         productCount = products.length;
       }
     } catch (apiError) {

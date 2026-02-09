@@ -1,6 +1,8 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
 const wooSecureService = require('../services/wooSecureService');
+const { testWooConnection } = require('../services/wooService');
+const wooAppPasswordService = require('../services/wooAppPasswordService');
 const authenticateToken = require('../middlewares/authMiddleware');
 
 const router = express.Router();
@@ -52,18 +54,23 @@ router.use((req, res, next) => {
  */
 router.post('/test', async (req, res) => {
   try {
-    const { storeUrl, consumerKey, consumerSecret } = req.body;
+    const { storeUrl, consumerKey, consumerSecret, wooUsername, wooAppPassword } = req.body;
 
-    if (!storeUrl || !consumerKey || !consumerSecret) {
+    if (
+      !storeUrl ||
+      (!consumerKey || !consumerSecret) &&
+      (!wooUsername || !wooAppPassword)
+    ) {
       return res.status(400).json({
         error: 'Missing required fields',
-        message: 'Store URL, Consumer Key, and Consumer Secret are required'
+        message: 'Store URL and either Consumer Key/Secret or Application Password are required'
       });
     }
 
-    // Validate URL format
+    // Normalize + validate URL format
+    const normalizedStoreUrl = storeUrl.startsWith('http') ? storeUrl : `https://${storeUrl}`;
     try {
-      new URL(storeUrl);
+      new URL(normalizedStoreUrl);
     } catch {
       return res.status(400).json({
         error: 'Invalid URL',
@@ -71,23 +78,31 @@ router.post('/test', async (req, res) => {
       });
     }
 
-    // Test connection
-    const testResult = await wooSecureService.testConnection(storeUrl, consumerKey, consumerSecret);
+    // Test connection using either auth method
+    const testResult = await testWooConnection(
+      normalizedStoreUrl,
+      consumerKey,
+      consumerSecret,
+      null,
+      null,
+      wooUsername,
+      wooAppPassword
+    );
 
-    if (testResult.valid) {
+    if (testResult.success) {
       res.json({
         success: true,
         message: 'Connection test successful',
-        storeInfo: testResult.storeInfo,
-        testResults: testResult.testResults
+        storeInfo: { url: normalizedStoreUrl },
+        testResults: { productsFetched: 1 }
       });
     } else {
       res.status(400).json({
         success: false,
-        error: testResult.error,
+        error: 'TEST_FAILED',
         message: testResult.message,
         details: testResult.details,
-        suggestions: getErrorSuggestions(testResult.error)
+        suggestions: getErrorSuggestions('INVALID_CREDENTIALS')
       });
     }
 
@@ -107,19 +122,24 @@ router.post('/test', async (req, res) => {
  */
 router.post('/connect', async (req, res) => {
   try {
-    const { storeUrl, consumerKey, consumerSecret, storeName } = req.body;
+    const { storeUrl, consumerKey, consumerSecret, storeName, wooUsername, wooAppPassword } = req.body;
     const userId = req.userId; // Fixed: use req.userId instead of req.user.id
 
-    if (!storeUrl || !consumerKey || !consumerSecret) {
+    if (
+      !storeUrl ||
+      (!consumerKey || !consumerSecret) &&
+      (!wooUsername || !wooAppPassword)
+    ) {
       return res.status(400).json({
         error: 'Missing required fields',
-        message: 'Store URL, Consumer Key, and Consumer Secret are required'
+        message: 'Store URL and either Consumer Key/Secret or Application Password are required'
       });
     }
 
-    // Validate URL format
+    // Normalize + validate URL format
+    const normalizedStoreUrl = storeUrl.startsWith('http') ? storeUrl : `https://${storeUrl}`;
     try {
-      new URL(storeUrl);
+      new URL(normalizedStoreUrl);
     } catch {
       return res.status(400).json({
         error: 'Invalid URL',
@@ -127,16 +147,24 @@ router.post('/connect', async (req, res) => {
       });
     }
 
-    // Test credentials first
-    const validation = await wooSecureService.validateCredentials(storeUrl, consumerKey, consumerSecret);
+    // Test credentials first (supports app passwords too)
+    const validation = await testWooConnection(
+      normalizedStoreUrl,
+      consumerKey,
+      consumerSecret,
+      null,
+      null,
+      wooUsername,
+      wooAppPassword
+    );
     
-    if (!validation.valid) {
+    if (!validation.success) {
       return res.status(400).json({
         success: false,
-        error: validation.error,
+        error: 'INVALID_CREDENTIALS',
         message: validation.message,
         details: validation.details,
-        suggestions: getErrorSuggestions(validation.error)
+        suggestions: getErrorSuggestions('INVALID_CREDENTIALS')
       });
     }
 
@@ -145,13 +173,14 @@ router.post('/connect', async (req, res) => {
       where: {
         userId: userId,
         platform: 'woocommerce',
-        storeUrl: storeUrl
+        storeUrl: normalizedStoreUrl
       }
     });
 
     // Encrypt credentials
-    const encryptedKey = wooSecureService.encrypt(consumerKey);
-    const encryptedSecret = wooSecureService.encrypt(consumerSecret);
+    const encryptedKey = consumerKey ? wooSecureService.encrypt(consumerKey) : null;
+    const encryptedSecret = consumerSecret ? wooSecureService.encrypt(consumerSecret) : null;
+    const encryptedAppPassword = wooAppPassword ? wooSecureService.encrypt(wooAppPassword) : null;
 
     let connection;
     if (existingConnection) {
@@ -159,13 +188,13 @@ router.post('/connect', async (req, res) => {
       connection = await prisma.connection.update({
         where: { id: existingConnection.id },
         data: {
-          consumerKey: JSON.stringify(encryptedKey),
-          consumerSecret: JSON.stringify(encryptedSecret),
-          storeName: storeName || `WooCommerce Store (${new URL(storeUrl).hostname})`,
+          consumerKey: encryptedKey ? JSON.stringify(encryptedKey) : null,
+          consumerSecret: encryptedSecret ? JSON.stringify(encryptedSecret) : null,
+          wooUsername: wooUsername || null,
+          wooAppPassword: encryptedAppPassword ? JSON.stringify(encryptedAppPassword) : null,
+          storeName: storeName || `WooCommerce Store (${new URL(normalizedStoreUrl).hostname})`,
           lastSync: new Date(),
           syncEnabled: true,
-          wooUsername: null, // Clear old auth methods
-          wooAppPassword: null,
           accessToken: null,
           accessTokenSecret: null
         }
@@ -177,10 +206,12 @@ router.post('/connect', async (req, res) => {
         data: {
           userId: userId,
           platform: 'woocommerce',
-          storeUrl: storeUrl,
-          storeName: storeName || `WooCommerce Store (${new URL(storeUrl).hostname})`,
-          consumerKey: JSON.stringify(encryptedKey),
-          consumerSecret: JSON.stringify(encryptedSecret),
+          storeUrl: normalizedStoreUrl,
+          storeName: storeName || `WooCommerce Store (${new URL(normalizedStoreUrl).hostname})`,
+          consumerKey: encryptedKey ? JSON.stringify(encryptedKey) : null,
+          consumerSecret: encryptedSecret ? JSON.stringify(encryptedSecret) : null,
+          wooUsername: wooUsername || null,
+          wooAppPassword: encryptedAppPassword ? JSON.stringify(encryptedAppPassword) : null,
           lastSync: new Date(),
           syncEnabled: true
         }
@@ -188,8 +219,24 @@ router.post('/connect', async (req, res) => {
       console.log(`✅ Created new WooCommerce connection for user ${userId}`);
     }
 
-    // Get store info
-    const storeInfo = await wooSecureService.getStoreInfo(storeUrl, consumerKey, consumerSecret);
+    // Register webhooks when using application password
+    if (wooUsername && wooAppPassword) {
+      try {
+        await wooAppPasswordService.registerWebhooks(normalizedStoreUrl, wooUsername, wooAppPassword);
+      } catch (err) {
+        console.warn('Webhook registration failed (non-blocking):', err.message);
+      }
+    }
+
+    // Get store info (best-effort)
+    let storeInfo = { url: normalizedStoreUrl };
+    try {
+      if (consumerKey && consumerSecret) {
+        storeInfo = await wooSecureService.getStoreInfo(normalizedStoreUrl, consumerKey, consumerSecret);
+      }
+    } catch (e) {
+      storeInfo = { url: normalizedStoreUrl };
+    }
 
     // Return success response (without sensitive data)
     res.json({
@@ -220,9 +267,9 @@ router.post('/connect', async (req, res) => {
 /**
  * Get user's WooCommerce connections
  */
-router.get('/connections', async (req, res) => {
-  try {
-    const userId = req.user.id;
+	router.get('/connections', async (req, res) => {
+	  try {
+	    const userId = req.userId;
 
     const connections = await prisma.connection.findMany({
       where: {
@@ -271,11 +318,11 @@ router.get('/connections', async (req, res) => {
 /**
  * Update WooCommerce connection
  */
-router.put('/connections/:id', async (req, res) => {
-  try {
-    const connectionId = parseInt(req.params.id);
-    const { storeUrl, consumerKey, consumerSecret, storeName } = req.body;
-    const userId = req.user.id;
+	router.put('/connections/:id', async (req, res) => {
+	  try {
+	    const connectionId = parseInt(req.params.id);
+	    const { storeUrl, consumerKey, consumerSecret, storeName } = req.body;
+	    const userId = req.userId;
 
     // Verify connection belongs to user
     const existingConnection = await prisma.connection.findFirst({
@@ -352,10 +399,10 @@ router.put('/connections/:id', async (req, res) => {
 /**
  * Delete WooCommerce connection
  */
-router.delete('/connections/:id', async (req, res) => {
-  try {
-    const connectionId = parseInt(req.params.id);
-    const userId = req.user.id;
+	router.delete('/connections/:id', async (req, res) => {
+	  try {
+	    const connectionId = parseInt(req.params.id);
+	    const userId = req.userId;
 
     // Verify connection belongs to user
     const existingConnection = await prisma.connection.findFirst({
@@ -398,10 +445,10 @@ router.delete('/connections/:id', async (req, res) => {
 /**
  * Get connection status
  */
-router.get('/connections/:id/status', async (req, res) => {
-  try {
-    const connectionId = parseInt(req.params.id);
-    const userId = req.user.id;
+	router.get('/connections/:id/status', async (req, res) => {
+	  try {
+	    const connectionId = parseInt(req.params.id);
+	    const userId = req.userId;
 
     const connection = await prisma.connection.findFirst({
       where: {
@@ -420,11 +467,14 @@ router.get('/connections/:id/status', async (req, res) => {
     }
 
     // Decrypt credentials for testing
-    let consumerKey, consumerSecret;
+    let consumerKey, consumerSecret, wooAppPassword;
     try {
       if (connection.consumerKey && connection.consumerSecret) {
         consumerKey = wooSecureService.decrypt(JSON.parse(connection.consumerKey));
         consumerSecret = wooSecureService.decrypt(JSON.parse(connection.consumerSecret));
+      }
+      if (connection.wooAppPassword) {
+        wooAppPassword = wooSecureService.decrypt(JSON.parse(connection.wooAppPassword));
       }
     } catch (error) {
       console.log('❌ Failed to decrypt credentials');
@@ -436,7 +486,7 @@ router.get('/connections/:id/status', async (req, res) => {
       });
     }
 
-    if (!consumerKey || !consumerSecret) {
+    if ((!consumerKey || !consumerSecret) && (!connection.wooUsername || !wooAppPassword)) {
       return res.json({
         success: true,
         status: 'NO_CREDENTIALS',
@@ -446,14 +496,22 @@ router.get('/connections/:id/status', async (req, res) => {
     }
 
     // Test connection
-    const testResult = await wooSecureService.testConnection(connection.storeUrl, consumerKey, consumerSecret);
+    const testResult = await testWooConnection(
+      connection.storeUrl,
+      consumerKey,
+      consumerSecret,
+      null,
+      null,
+      connection.wooUsername,
+      wooAppPassword
+    );
 
     res.json({
       success: true,
-      status: testResult.valid ? 'CONNECTED' : 'ERROR',
-      message: testResult.valid ? 'Connection is working' : testResult.message,
+      status: testResult.success ? 'CONNECTED' : 'ERROR',
+      message: testResult.message,
       lastTest: new Date(),
-      needsReconnect: !testResult.valid,
+      needsReconnect: !testResult.success,
       storeInfo: testResult.storeInfo
     });
 

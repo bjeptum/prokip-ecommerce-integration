@@ -1,6 +1,19 @@
 const axios = require('axios');
 const crypto = require('crypto');
-const { getWooBaseUrl } = require('./wooService');
+const https = require('https');
+
+const insecureAgent = new https.Agent({
+  rejectUnauthorized: process.env.ALLOW_INSECURE_SSL === 'true' ? false : true
+});
+
+function getWooBaseUrl(storeUrl) {
+  if (!storeUrl) throw new Error('Store URL is required');
+  let baseURL = storeUrl.trim();
+  if (!baseURL.startsWith('http')) {
+    baseURL = `https://${baseURL}`;
+  }
+  return baseURL.replace(/\/$/, '');
+}
 
 /**
  * WooCommerce Application Password Service
@@ -58,6 +71,7 @@ class WooAppPasswordService {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         },
+        httpsAgent: insecureAgent,
         maxRedirects: 0,
         validateStatus: (status) => status < 400
       });
@@ -84,7 +98,9 @@ class WooAppPasswordService {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': cookies.join('; ')
-          }
+          },
+          httpsAgent: insecureAgent,
+          timeout: 20000
         }
       );
 
@@ -153,7 +169,8 @@ class WooAppPasswordService {
             'User-Agent': 'Prokip-Integration/1.0',
             'Accept': 'application/json'
           },
-          timeout: 15000,
+          httpsAgent: insecureAgent,
+          timeout: 20000,
           validateStatus: (status) => status < 500 // Don't throw on 4xx errors
         });
 
@@ -310,7 +327,8 @@ class WooAppPasswordService {
           headers: {
             'User-Agent': 'Prokip-Integration/1.0'
           },
-          timeout: 15000
+          httpsAgent: insecureAgent,
+          timeout: 20000
         });
       },
       
@@ -325,7 +343,8 @@ class WooAppPasswordService {
             'Content-Type': 'application/json',
             'User-Agent': 'Prokip-Integration/1.0'
           },
-          timeout: 15000
+          httpsAgent: insecureAgent,
+          timeout: 20000
         });
       },
 
@@ -340,7 +359,8 @@ class WooAppPasswordService {
             'Content-Type': 'application/json',
             'User-Agent': 'Prokip-Integration/1.0'
           },
-          timeout: 15000
+          httpsAgent: insecureAgent,
+          timeout: 20000
         });
       }
     };

@@ -69,36 +69,54 @@ class WooSecureService {
       const rootUrl = `${baseUrl}/wp-json/wc/v3`;
       console.log(`🔍 Validating credentials for: ${storeUrl}`);
       
-      const rootResponse = await axios.get(rootUrl, {
-        auth: {
-          username: consumerKey,
-          password: consumerSecret
-        },
-        headers: {
-          'User-Agent': 'Prokip-Integration/1.0',
-          'Accept': 'application/json'
-        },
-        timeout: 15000,
-        validateStatus: (status) => status < 500
-      });
+      const headers = {
+        'User-Agent': 'Prokip-Integration/1.0',
+        Accept: 'application/json'
+      };
 
-      if (rootResponse.status !== 200 || rootResponse.data.namespace !== 'wc/v3') {
-        throw new Error('Invalid WooCommerce API response');
-      }
+      const requestBasic = (url, params = {}) =>
+        axios.get(url, {
+          params,
+          auth: {
+            username: consumerKey,
+            password: consumerSecret
+          },
+          headers,
+          timeout: 15000
+        });
+
+      const requestQueryAuth = (url, params = {}) =>
+        axios.get(url, {
+          params: {
+            ...params,
+            consumer_key: consumerKey,
+            consumer_secret: consumerSecret
+          },
+          headers,
+          timeout: 15000
+        });
+
+      const requestWithFallback = async (url, params = {}) => {
+        try {
+          return await requestBasic(url, params);
+        } catch (error) {
+          const status = error.response?.status;
+          const shouldRetryWithQueryAuth = status === 400 || status === 401 || status === 403;
+
+          // Some hosts strip the Authorization header; retry with query-string auth.
+          if (shouldRetryWithQueryAuth) {
+            return await requestQueryAuth(url, params);
+          }
+
+          throw error;
+        }
+      };
+
+      const rootResponse = await requestWithFallback(rootUrl);
 
       // Test products endpoint for permissions
-      const productsUrl = `${baseUrl}/wp-json/wc/v3/products?per_page=1`;
-      const productsResponse = await axios.get(productsUrl, {
-        auth: {
-          username: consumerKey,
-          password: consumerSecret
-        },
-        headers: {
-          'User-Agent': 'Prokip-Integration/1.0',
-          'Accept': 'application/json'
-        },
-        timeout: 15000
-      });
+      const productsUrl = `${baseUrl}/wp-json/wc/v3/products`;
+      await requestWithFallback(productsUrl, { per_page: 1 });
 
       return {
         valid: true,

@@ -124,14 +124,17 @@ class WooSimpleAppPassword {
           success: false,
           issue: 'WOOCOMMERCE_PERMISSIONS',
           message: 'User cannot view WooCommerce products',
-          error: error.response.data.message
+          error: error.response.data.message,
+          status: error.response.status || 403,
+          code: error.response.data.code
         };
       }
 
       return {
         success: false,
         issue: 'OTHER_ERROR',
-        message: error.response?.data?.message || error.message
+        message: error.response?.data?.message || error.message,
+        status: error.response?.status
       };
     }
   }
