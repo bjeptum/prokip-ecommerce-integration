@@ -15,23 +15,28 @@ function getEnvApiBase() {
 
 async function resolveApiBase(userId = null) {
   const envBase = getEnvApiBase();
+  if (userId) {
+    try {
+      const config = await prisma.prokipConfig.findFirst({ where: { userId } });
+      if (config?.apiUrl) return config.apiUrl;
+    } catch (error) {
+      // ignore and fall through
+    }
+  }
+
+  // Fallback: if explicitly using local Prokip and no per-user apiUrl, use local base
   if (process.env.PROKIP_LOCAL_AUTH === 'true' && process.env.PROKIP_BASE_URL) {
     return process.env.PROKIP_BASE_URL;
   }
-  if (!userId) return envBase;
 
-  try {
-    const config = await prisma.prokipConfig.findFirst({ where: { userId } });
-    return config?.apiUrl || envBase;
-  } catch (error) {
-    return envBase;
-  }
+  return envBase;
 }
 
 async function authenticateUser(username, password) {
   try {
     const formData = new URLSearchParams();
     formData.append('username', username);
+    formData.append('email', username); // some Prokip instances expect email field
     formData.append('password', password);
     formData.append('desktop_version', '');
     formData.append('client_id', process.env.PROKIP_CLIENT_ID || '6');
@@ -40,8 +45,11 @@ async function authenticateUser(username, password) {
     formData.append('granttype', 'password');
     formData.append('scope', '');
 
-    const response = await axios.post(`${process.env.PROKIP_API}/oauth/token`, formData, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  const response = await axios.post(`${process.env.PROKIP_API}/oauth/token`, formData, {
+      headers: { 
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      },
       timeout: 60000
     });
 
@@ -138,7 +146,11 @@ async function getValidToken(userId = null) {
 
 async function getBusinessLocations(accessTokenOrUserId) {
   let token = accessTokenOrUserId;
-  let apiBase = getEnvApiBase();
+  // If caller passed an access token directly, always use the remote Prokip API base
+  let apiBase = (typeof accessTokenOrUserId === 'string')
+    ? (process.env.PROKIP_API || getEnvApiBase())
+    : getEnvApiBase();
+
   if (typeof accessTokenOrUserId === 'number') {
     token = await getValidToken(accessTokenOrUserId);
     apiBase = await resolveApiBase(accessTokenOrUserId);

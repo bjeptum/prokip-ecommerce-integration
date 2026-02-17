@@ -102,7 +102,7 @@ function mapWooOrderToProkipStock(wooOrder, locationId) {
     transaction_date: wooOrder.date_created ? 
       new Date(wooOrder.date_created).toISOString().slice(0, 19).replace('T', ' ') :
       new Date().toISOString().slice(0, 19).replace('T', ' '),
-    invoice_no: `WOO-${orderNumber}`,
+    invoice_no: `woo${orderNumber}`,
     status: 'final',
     type: 'sell',
     payment_status: 'paid',

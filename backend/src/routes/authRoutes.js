@@ -123,21 +123,27 @@ router.post('/prokip-login', [
     let expires_in;
     let locations = [];
 
+    let usedLocal = false;
+
     if (useLocalProkip) {
-      const authResult = await prokipLocalAuthService.authenticateUser(username, password);
-      if (!authResult.success) {
-        return res.status(400).json({ 
-          error: authResult.error || 'Invalid Prokip credentials. Please check your email and password.'
-        });
+      try {
+        const authResult = await prokipLocalAuthService.authenticateUser(username, password);
+        if (authResult.success) {
+          const prokipUser = authResult.user;
+          locations = await prokipLocalAuthService.getBusinessLocations(prokipUser.business_id);
+          access_token = process.env.PROKIP_ECOM_TOKEN || 'local-token';
+          refresh_token = null;
+          expires_in = 86400;
+          usedLocal = true;
+        } else {
+          console.warn('⚠️ Local Prokip auth failed, attempting remote OAuth...', authResult.error);
+        }
+      } catch (localErr) {
+        console.warn('⚠️ Local Prokip DB auth error, falling back to remote OAuth:', localErr.message);
       }
+    }
 
-      const prokipUser = authResult.user;
-      locations = await prokipLocalAuthService.getBusinessLocations(prokipUser.business_id);
-
-      access_token = process.env.PROKIP_ECOM_TOKEN || 'local-token';
-      refresh_token = null;
-      expires_in = 86400;
-    } else {
+    if (!usedLocal) {
       // Authenticate with Prokip OAuth API (real method)
       const tokenData = await prokipService.authenticateUser(username, password);
       access_token = tokenData.access_token;
@@ -174,7 +180,7 @@ router.post('/prokip-login', [
     }
 
     // Store Prokip config using OAuth token
-    const apiUrl = useLocalProkip
+    const apiUrl = (useLocalProkip && usedLocal)
       ? (process.env.PROKIP_BASE_URL || process.env.PROKIP_API)
       : process.env.PROKIP_API;
 

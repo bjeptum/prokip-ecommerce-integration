@@ -10,6 +10,18 @@ function normalizeSku(sku) {
   return (sku || '').toString().trim().toLowerCase();
 }
 
+function buildInvoiceNumber(platform, orderNumber = null, orderId = null) {
+  const prefixMap = {
+    woocommerce: 'woo',
+    shopify: 'shop',
+    prokip: 'prokip'
+  };
+
+  const prefix = prefixMap[(platform || '').toLowerCase()] || 'eco';
+  const core = (orderNumber || orderId || Date.now()).toString().replace(/[^a-zA-Z0-9]/g, '');
+  return `${prefix}${core}`;
+}
+
 function extractProductsFromResponse(response) {
   if (!response) return [];
   if (Array.isArray(response)) return response;
@@ -210,14 +222,22 @@ function mapWooOrderToProkipOrder(wooOrder, skuMap, connection) {
 
   const customerId = connection?.prokipCustomerId || connection?.userId || 1;
 
+  const totalQuantity = items.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0);
+  const invoiceNo = buildInvoiceNumber('woocommerce', wooOrder?.number, wooOrder?.id);
+
   return {
     payload: {
       customer_id: customerId,
       addresses: mapAddresses(wooOrder),
-      products
+      products,
+      invoice_no: invoiceNo,
+      source_platform: 'woocommerce',
+      source_order_number: wooOrder?.number || wooOrder?.id
     },
     items,
-    missing
+    missing,
+    invoiceNo,
+    totalQuantity
   };
 }
 
@@ -231,7 +251,7 @@ async function syncWooOrderToProkip(wooOrder, connection, userId) {
   }
 
   const skuMap = await getSkuMapForUser(userId, connection?.id || null);
-  const { payload, items, missing } = mapWooOrderToProkipOrder(wooOrder, skuMap, connection);
+  const { payload, items, missing, invoiceNo, totalQuantity } = mapWooOrderToProkipOrder(wooOrder, skuMap, connection);
 
   if (!items || items.length === 0) {
     return {
@@ -248,6 +268,14 @@ async function syncWooOrderToProkip(wooOrder, connection, userId) {
       return { success: false, error: 'Missing Prokip business location for this user' };
     }
 
+    // Try to create the sale through Prokip-2 API so an invoice shows up in Prokip.
+    let prokipOrder = null;
+    try {
+      prokipOrder = await prokipEcomClient.createOrder(payload, userId);
+    } catch (err) {
+      prokipOrder = { success: false, error: err.message };
+    }
+
     const deduction = await prokipLocalAuthService.deductStockForVariations(locationId, items);
 
     return {
@@ -260,8 +288,11 @@ async function syncWooOrderToProkip(wooOrder, connection, userId) {
         inserted: deduction.inserted,
         deducted_lines: items.length
       },
+      prokip_order: prokipOrder,
       missing,
-      mappedCount: items.length
+      mappedCount: items.length,
+      invoiceNo,
+      totalQuantity
     };
   }
 
@@ -271,7 +302,148 @@ async function syncWooOrderToProkip(wooOrder, connection, userId) {
     success: true,
     response,
     missing,
-    mappedCount: items.length
+    mappedCount: items.length,
+    invoiceNo,
+    totalQuantity
+  };
+}
+
+function shouldProcessShopifyOrder(order) {
+  const financialStatus = (order?.financial_status || '').toLowerCase();
+  const cancelled = order?.cancelled_at || order?.cancel_reason;
+  if (cancelled) return false;
+  return ['paid', 'partially_paid', 'partially_refunded', 'authorized'].includes(financialStatus);
+}
+
+function mapShopifyOrderToProkipOrder(order, skuMap, connection) {
+  const products = {};
+  const itemMap = new Map();
+  const missing = [];
+
+  (order?.line_items || []).forEach((item) => {
+    const skuKey = normalizeSku(item?.sku);
+    const variantKey = normalizeSku(item?.variant_id);
+    const productKey = normalizeSku(item?.product_id);
+    const quantity = parseInt(item?.quantity, 10) || 0;
+
+    const lookupKeys = [skuKey, variantKey, productKey].filter(Boolean);
+    if (!lookupKeys.length || quantity <= 0) return;
+
+    let mapped = null;
+    for (const candidate of lookupKeys) {
+      if (skuMap.has(candidate)) {
+        mapped = skuMap.get(candidate);
+        break;
+      }
+    }
+
+    const variationId = typeof mapped === 'object' ? mapped?.variation_id : mapped;
+    if (!variationId) {
+      missing.push({
+        sku: item?.sku || null,
+        product_id: item?.product_id || null,
+        variant_id: item?.variant_id || null,
+        reason: 'no_prokip_match'
+      });
+      return;
+    }
+
+    const key = variationId.toString();
+    const existing = itemMap.get(key);
+    if (existing) {
+      existing.quantity += quantity;
+    } else {
+      itemMap.set(key, {
+        variation_id: parseInt(variationId, 10),
+        quantity,
+        sku: item?.sku || null,
+        product_name: item?.title || `Product ${variationId}`,
+        product_id: typeof mapped === 'object' ? mapped?.product_id : null,
+        product_variation_id: typeof mapped === 'object' ? mapped?.product_variation_id : null
+      });
+    }
+  });
+
+  const items = Array.from(itemMap.values());
+  items.forEach((item) => {
+    products[item.variation_id] = {
+      variation_id: item.variation_id,
+      product_name: item.product_name,
+      quantity: item.quantity,
+      sku: item.sku || null
+    };
+  });
+
+  const customerId = connection?.prokipCustomerId || connection?.userId || 1;
+  const invoiceNo = buildInvoiceNumber('shopify', order?.order_number, order?.id);
+  const totalQuantity = items.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0);
+
+  return {
+    payload: {
+      customer_id: customerId,
+      addresses: {
+        shipping: {
+          name: `${order?.shipping_address?.first_name || ''} ${order?.shipping_address?.last_name || ''}`.trim(),
+          address: `${order?.shipping_address?.address1 || ''} ${order?.shipping_address?.address2 || ''}`.trim(),
+          phone: order?.shipping_address?.phone || order?.customer?.phone || '',
+          email: order?.email || order?.customer?.email || ''
+        }
+      },
+      products,
+      invoice_no: invoiceNo,
+      source_platform: 'shopify',
+      source_order_number: order?.order_number || order?.id
+    },
+    items,
+    missing,
+    invoiceNo,
+    totalQuantity
+  };
+}
+
+async function syncShopifyOrderToProkip(order, connection, userId) {
+  if (!order) return { success: false, error: 'Missing Shopify order data' };
+  if (!shouldProcessShopifyOrder(order)) {
+    return { success: true, action: 'skipped', reason: 'status_not_eligible' };
+  }
+
+  const skuMap = await getSkuMapForUser(userId, connection?.id || null);
+  const { payload, items, missing, invoiceNo, totalQuantity } = mapShopifyOrderToProkipOrder(order, skuMap, connection);
+
+  if (!items || !items.length) {
+    return { success: false, error: 'No mappable SKUs found for this order', missing };
+  }
+
+  const config = userId ? await prisma.prokipConfig.findFirst({ where: { userId } }) : null;
+  const locationId = config?.locationId ? parseInt(config.locationId, 10) : null;
+
+  if (!locationId) {
+    return { success: false, error: 'Missing Prokip business location for this user' };
+  }
+
+  let prokipOrder = null;
+  try {
+    prokipOrder = await prokipEcomClient.createOrder(payload, userId);
+  } catch (err) {
+    prokipOrder = { success: false, error: err.message };
+  }
+
+  let deduction = null;
+  try {
+    deduction = await prokipLocalAuthService.deductStockForVariations(locationId, items);
+  } catch (err) {
+    deduction = { success: false, error: err.message };
+  }
+
+  return {
+    success: true,
+    prokip_order: prokipOrder,
+    response: prokipOrder,
+    stock: deduction,
+    missing,
+    mappedCount: items.length,
+    invoiceNo,
+    totalQuantity
   };
 }
 
@@ -295,7 +467,10 @@ async function invalidateSkuMapForUser(userId) {
 
 module.exports = {
   syncWooOrderToProkip,
+  syncShopifyOrderToProkip,
+  mapShopifyOrderToProkipOrder,
   getSkuMapForUser,
   mapWooOrderToProkipOrder,
-  invalidateSkuMapForUser
+  invalidateSkuMapForUser,
+  buildInvoiceNumber
 };

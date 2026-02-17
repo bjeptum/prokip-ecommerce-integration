@@ -200,6 +200,89 @@ async function deductStockForVariations(locationId, items) {
   }
 }
 
+/**
+ * Set an exact stock quantity for a given variation at a location.
+ * Creates the location detail row if it does not yet exist.
+ */
+async function setStockForVariation(locationId, variationId, quantity) {
+  const loc = normalizeLocationId(locationId);
+  if (!loc) throw new Error('Missing location ID for stock update');
+
+  const qty = Number.parseFloat(quantity);
+  if (!Number.isFinite(qty)) {
+    throw new Error('Invalid quantity supplied for stock update');
+  }
+
+  const connection = await getPool().getConnection();
+  try {
+    const [existingRows] = await connection.execute(
+      `SELECT id, product_id, product_variation_id 
+       FROM variation_location_details 
+       WHERE variation_id = ? AND location_id = ? 
+       LIMIT 1`,
+      [variationId, loc]
+    );
+
+    if (existingRows.length > 0) {
+      await connection.execute(
+        `UPDATE variation_location_details 
+         SET qty_available = ?, updated_at = NOW() 
+         WHERE id = ?`,
+        [qty, existingRows[0].id]
+      );
+      return { updated: true, inserted: false, variationId };
+    }
+
+    // Look up variation metadata so the insert stays consistent with Prokip schema.
+    const [variationRows] = await connection.execute(
+      `SELECT product_id, product_variation_id 
+       FROM variations 
+       WHERE id = ? 
+       LIMIT 1`,
+      [variationId]
+    );
+
+    const variationMeta = variationRows?.[0] || {};
+
+    await connection.execute(
+      `INSERT INTO variation_location_details
+        (product_id, product_variation_id, variation_id, location_id, qty_available, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
+      [
+        variationMeta.product_id || null,
+        variationMeta.product_variation_id || null,
+        variationId,
+        loc,
+        qty
+      ]
+    );
+    return { updated: false, inserted: true, variationId };
+  } finally {
+    connection.release();
+  }
+}
+
+/**
+ * Convenience helper: set stock by SKU (or sub_sku) instead of variation id.
+ * Relies on the SKU→variation map for the provided location.
+ */
+async function setStockForSku(locationId, sku, quantity) {
+  const normalizedSku = normalizeSkuKey(sku);
+  if (!normalizedSku) {
+    throw new Error('SKU is required for stock update');
+  }
+
+  const map = await getSkuVariationMap(locationId);
+  if (!map.has(normalizedSku)) {
+    throw new Error(`No Prokip variation found for SKU ${sku}`);
+  }
+
+  const record = map.get(normalizedSku);
+  const variationId = record?.variation_id || record?.id || record;
+
+  return await setStockForVariation(locationId, variationId, quantity);
+}
+
 async function getProducts(locationId) {
   const db = getPool();
   const loc = normalizeLocationId(locationId);
@@ -579,6 +662,8 @@ module.exports = {
   getBusinessIdForLocation,
   getSkuVariationMap,
   deductStockForVariations,
+  setStockForVariation,
+  setStockForSku,
   getProducts,
   getSales,
   getPurchases,

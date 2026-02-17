@@ -39,7 +39,12 @@ router.get('/products', async (req, res) => {
     const config = await prokipService.getProkipConfig(userId);
     const locationId = config?.locationId ? parseInt(config.locationId, 10) : null;
 
-    if (process.env.PROKIP_LOCAL_AUTH === 'true') {
+    const useLocal =
+      process.env.PROKIP_LOCAL_AUTH === 'true' &&
+      config?.apiUrl &&
+      config.apiUrl.toString().includes(process.env.PROKIP_BASE_URL || '127.0.0.1');
+
+    if (useLocal) {
       const products = await prokipLocalAuthService.getProducts(locationId);
       return res.json({ success: true, products, locationId });
     }
@@ -57,7 +62,12 @@ router.get('/sales', async (req, res) => {
     const config = await prokipService.getProkipConfig(userId);
     const locationId = config?.locationId ? parseInt(config.locationId, 10) : null;
 
-    if (process.env.PROKIP_LOCAL_AUTH === 'true') {
+    const useLocal =
+      process.env.PROKIP_LOCAL_AUTH === 'true' &&
+      config?.apiUrl &&
+      config.apiUrl.toString().includes(process.env.PROKIP_BASE_URL || '127.0.0.1');
+
+    if (useLocal) {
       const sales = await prokipLocalAuthService.getSales(locationId);
       return res.json({ success: true, sales, locationId });
     }
@@ -75,7 +85,12 @@ router.get('/purchases', async (req, res) => {
     const config = await prokipService.getProkipConfig(userId);
     const locationId = config?.locationId ? parseInt(config.locationId, 10) : null;
 
-    if (process.env.PROKIP_LOCAL_AUTH === 'true') {
+    const useLocal =
+      process.env.PROKIP_LOCAL_AUTH === 'true' &&
+      config?.apiUrl &&
+      config.apiUrl.toString().includes(process.env.PROKIP_BASE_URL || '127.0.0.1');
+
+    if (useLocal) {
       const purchases = await prokipLocalAuthService.getPurchases(locationId);
       return res.json({ success: true, purchases, locationId });
     }

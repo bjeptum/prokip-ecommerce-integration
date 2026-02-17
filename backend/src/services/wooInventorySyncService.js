@@ -7,7 +7,7 @@
  */
 
 const { shouldReduceStock } = require('./wooToProkipStockMapper');
-const { syncWooOrderToProkip, invalidateSkuMapForUser } = require('./prokipEcomOrderSyncService');
+const { syncWooOrderToProkip, invalidateSkuMapForUser, buildInvoiceNumber } = require('./prokipEcomOrderSyncService');
 const prisma = require('../lib/prisma');
 const { getWooProducts } = require('./wooService');
 const prokipLocalAuthService = require('./prokipLocalAuthService');
@@ -154,6 +154,13 @@ async function handleWooCommerceInventorySync(wooOrder, webhookHeaders, userId =
     }
 
     const prokipResponse = prokipResult.response || prokipResult;
+    const invoiceNo =
+      prokipResult.invoiceNo ||
+      buildInvoiceNumber('woocommerce', wooOrder.number, orderId);
+    const totalQuantity =
+      prokipResult.totalQuantity ||
+      wooOrder.line_items?.reduce((sum, item) => sum + (parseInt(item.quantity) || 0), 0) ||
+      0;
 
     // STEP 5: Record successful processing in SalesLog
     const salesLog = await prisma.salesLog.create({
@@ -161,7 +168,7 @@ async function handleWooCommerceInventorySync(wooOrder, webhookHeaders, userId =
         connectionId: connection.id,
         orderId: orderId,
         orderNumber: wooOrder.number?.toString(),
-        invoiceNo: `WOO-${orderId}`,
+        invoiceNo,
         platform: 'woocommerce',
         customerName: wooOrder.billing?.first_name && wooOrder.billing?.last_name ? 
           `${wooOrder.billing.first_name} ${wooOrder.billing.last_name}` : 
@@ -186,7 +193,7 @@ async function handleWooCommerceInventorySync(wooOrder, webhookHeaders, userId =
       salesLogId: salesLog.id,
       prokipSellId: null,
       itemsProcessed: wooOrder.line_items?.length || 0,
-      totalQuantity: wooOrder.line_items?.reduce((sum, item) => sum + (parseInt(item.quantity) || 0), 0) || 0,
+      totalQuantity,
       totalAmount: parseFloat(wooOrder.total || 0)
     };
 

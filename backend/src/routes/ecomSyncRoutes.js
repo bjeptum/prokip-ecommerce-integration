@@ -2,11 +2,11 @@ const express = require('express');
 const prisma = require('../lib/prisma');
 const { decryptCredentials, decryptAppPassword, createOrUpdateProductInStore, updateInventoryInStore } = require('../services/storeService');
 const { testWooConnection, getWooOrders, getWooProducts } = require('../services/wooService');
-const { testShopifyConnection } = require('../services/shopifyService');
+const { testShopifyConnection, getShopifyOrders, getShopifyProducts } = require('../services/shopifyService');
 const prokipEcomClient = require('../services/prokipEcomClient');
 const { handleWooCommerceInventorySync } = require('../services/wooInventorySyncService');
 const prokipLocalAuthService = require('../services/prokipLocalAuthService');
-const { invalidateSkuMapForUser } = require('../services/prokipEcomOrderSyncService');
+const { invalidateSkuMapForUser, syncShopifyOrderToProkip, buildInvoiceNumber } = require('../services/prokipEcomOrderSyncService');
 
 const router = express.Router();
 const IS_LOCAL_PROKIP = process.env.PROKIP_LOCAL_AUTH === 'true';
@@ -602,6 +602,143 @@ router.post('/push-products', handlePushProducts);
 router.post('/sync-inventory', handlePushProducts);
 
 /**
+ * Pull inventory from store and set Prokip stock to match (useful for restocks/additions)
+ * POST /api/ecom/sync-inventory-from-store
+ */
+router.post('/sync-inventory-from-store', async (req, res) => {
+  try {
+    const { store_id, limit = 100, page = 1 } = req.body;
+    const userId = req.userId;
+
+    if (!store_id) {
+      return res.status(400).json({ success: false, message: 'Store ID is required' });
+    }
+
+    const connection = await resolveConnection(store_id, userId);
+    if (!connection) {
+      return res.status(404).json({ success: false, message: 'Connection not found for this user' });
+    }
+
+    // Remote mode: delegate to Prokip-2 API which already handles overwriting stock.
+    if (process.env.PROKIP_LOCAL_AUTH !== 'true') {
+      const response = await prokipEcomClient.syncProducts(
+        { store_id, overwrite_stock: true, limit, page },
+        userId
+      );
+      return res.json({ success: true, mode: 'remote', response });
+    }
+
+    const prokipConfig = await prisma.prokipConfig.findFirst({ where: { userId } });
+    const locationId = prokipConfig?.locationId ? parseInt(prokipConfig.locationId, 10) : null;
+    if (!locationId) {
+      return res.status(400).json({ success: false, message: 'Select a Prokip business location first' });
+    }
+
+    let updated = 0;
+    let skipped = 0;
+    let failed = 0;
+    const errors = [];
+    const now = new Date();
+
+    if (connection.platform === 'woocommerce') {
+      const { consumerKey, consumerSecret } = decryptCredentials(connection);
+      const appPassword = decryptAppPassword(connection);
+      const wooProducts = await getWooProducts(
+        connection.storeUrl,
+        consumerKey,
+        consumerSecret,
+        connection.oauthToken,
+        connection.oauthSecret,
+        connection.wooUsername,
+        appPassword,
+        { per_page: limit, page, status: 'any' }
+      );
+
+      for (const product of wooProducts || []) {
+        const sku = (product?.sku || '').trim();
+        if (!sku) { skipped += 1; continue; }
+        const qty = product?.stock_quantity;
+        if (qty === null || qty === undefined || Number.isNaN(Number.parseFloat(qty))) {
+          skipped += 1;
+          continue;
+        }
+        try {
+          await prokipLocalAuthService.setStockForSku(locationId, sku, qty);
+          await prisma.inventoryLog.upsert({
+            where: { connectionId_sku: { connectionId: connection.id, sku } },
+            update: { quantity: parseInt(qty, 10) || 0, lastSynced: now },
+            create: {
+              connectionId: connection.id,
+              productId: product?.id?.toString() || sku,
+              productName: product?.name || 'Product',
+              sku,
+              quantity: parseInt(qty, 10) || 0,
+              price: parseFloat(product?.regular_price || 0) || 0,
+              lastSynced: now
+            }
+          });
+          updated += 1;
+        } catch (err) {
+          failed += 1;
+          if (errors.length < 10) errors.push({ sku, error: err.message });
+        }
+      }
+    } else if (connection.platform === 'shopify') {
+      const shopifyProducts = await getShopifyProducts(connection.storeUrl, connection.accessToken);
+      for (const product of shopifyProducts || []) {
+        for (const variant of product?.variants || []) {
+          const sku = (variant?.sku || '').trim();
+          if (!sku) { skipped += 1; continue; }
+          const qty = variant?.inventory_quantity;
+          if (qty === null || qty === undefined || Number.isNaN(Number.parseFloat(qty))) {
+            skipped += 1;
+            continue;
+          }
+          try {
+            await prokipLocalAuthService.setStockForSku(locationId, sku, qty);
+            await prisma.inventoryLog.upsert({
+              where: { connectionId_sku: { connectionId: connection.id, sku } },
+              update: { quantity: parseInt(qty, 10) || 0, lastSynced: now },
+              create: {
+                connectionId: connection.id,
+                productId: variant?.id?.toString() || sku,
+                productName: product?.title || 'Product',
+                sku,
+                quantity: parseInt(qty, 10) || 0,
+                price: parseFloat(variant?.price || 0) || 0,
+                lastSynced: now
+              }
+            });
+            updated += 1;
+          } catch (err) {
+            failed += 1;
+            if (errors.length < 10) errors.push({ sku, error: err.message });
+          }
+        }
+      }
+    } else {
+      return res.status(400).json({ success: false, message: 'Unsupported platform for inventory pull' });
+    }
+
+    res.json({
+      success: failed === 0,
+      platform: connection.platform,
+      products_updated: updated,
+      products_failed: failed,
+      products_skipped: skipped,
+      errors
+    });
+  } catch (error) {
+    console.error('Sync inventory from store error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to sync inventory from store',
+      error: error.message
+    });
+  }
+});
+
+/**
  * Sync Orders to Prokip (with stock deduction)
  * POST /api/ecom/sync-orders
  */
@@ -627,10 +764,113 @@ router.post('/sync-orders', async (req, res) => {
       });
     }
 
+    if (connection.platform === 'shopify') {
+      const orders = await getShopifyOrders(connection.storeUrl, connection.accessToken, limit);
+
+      if (!orders || orders.length === 0) {
+        return res.json({
+          success: true,
+          message: 'No Shopify orders found',
+          orders_processed: 0,
+          stock_deductions: 0
+        });
+      }
+
+      const paidStatuses = ['paid', 'partially_paid', 'partially_refunded', 'authorized'];
+      const paidOrders = orders.filter(o => paidStatuses.includes((o.financial_status || '').toLowerCase()));
+      const limitedOrders = paidOrders.slice(0, limit);
+
+      let processed = 0;
+      let skipped = orders.length - paidOrders.length;
+      let failed = 0;
+      const failures = [];
+
+      for (const order of limitedOrders) {
+        try {
+          const result = await syncShopifyOrderToProkip(order, connection, userId);
+          if (result?.action === 'skipped') {
+            skipped += 1;
+            continue;
+          }
+          if (result?.success) {
+            processed += 1;
+            const invoiceNo = result.invoiceNo || buildInvoiceNumber('shopify', order.order_number, order.id);
+            const orderId = order.id?.toString();
+            try {
+              await prisma.salesLog.upsert({
+                where: {
+                  connectionId_orderId: {
+                    connectionId: connection.id,
+                    orderId
+                  }
+                },
+                update: {
+                  invoiceNo,
+                  orderNumber: order.order_number?.toString(),
+                  platform: 'shopify',
+                  customerName: `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || order.email || 'Unknown',
+                  customerEmail: order.email || order.customer?.email || null,
+                  totalAmount: parseFloat(order.total_price || order.current_total_price || 0),
+                  status: order.financial_status || order.fulfillment_status || 'paid',
+                  orderDate: new Date(order.created_at || Date.now()),
+                  stockDeducted: true,
+                  stockDeductionDate: new Date()
+                },
+                create: {
+                  connectionId: connection.id,
+                  orderId,
+                  orderNumber: order.order_number?.toString(),
+                  invoiceNo,
+                  platform: 'shopify',
+                  customerName: `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || order.email || 'Unknown',
+                  customerEmail: order.email || order.customer?.email || null,
+                  totalAmount: parseFloat(order.total_price || order.current_total_price || 0),
+                  status: order.financial_status || order.fulfillment_status || 'paid',
+                  orderDate: new Date(order.created_at || Date.now()),
+                  stockDeducted: true,
+                  stockDeductionDate: new Date()
+                }
+              });
+            } catch (logErr) {
+              console.warn('⚠️ Failed to log Shopify order in SalesLog:', logErr.message);
+            }
+          } else {
+            failed += 1;
+            if (failures.length < 10) {
+              failures.push({
+                orderId: order.id?.toString() || null,
+                reason: result?.reason || null,
+                error: result?.error || null,
+                missing: result?.missing || null
+              });
+            }
+          }
+        } catch (err) {
+          failed += 1;
+          if (failures.length < 10) {
+            failures.push({
+              orderId: order.id?.toString() || null,
+              error: err.message
+            });
+          }
+        }
+      }
+
+      return res.json({
+        success: failed === 0,
+        orders_found: paidOrders.length,
+        orders_processed: processed,
+        orders_skipped: skipped,
+        orders_failed: failed,
+        failures,
+        message: `Shopify orders sync complete: ${processed} processed, ${skipped} skipped, ${failed} failed`
+      });
+    }
+
     if (connection.platform !== 'woocommerce') {
       return res.status(400).json({
         success: false,
-        message: 'Order sync is only supported for WooCommerce connections'
+        message: 'Order sync is only supported for WooCommerce or Shopify connections'
       });
     }
 

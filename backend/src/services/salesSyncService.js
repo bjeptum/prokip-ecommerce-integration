@@ -13,13 +13,14 @@ async function recordSaleWithPrefix(saleData) {
     
     // Generate invoice number with platform prefix
     const prefixMap = {
-      'woocommerce': 'WOO',
-      'shopify': 'SHOPIFY', 
-      'prokip': 'PROKIP'
+      'woocommerce': 'woo',
+      'shopify': 'shop', 
+      'prokip': 'prokip'
     };
     
-    const prefix = prefixMap[platform.toLowerCase()] || 'UNKNOWN';
-    const invoiceNo = `${prefix}-${Date.now()}`;
+    const prefix = prefixMap[platform?.toLowerCase()] || 'ec';
+    const core = saleData.platformOrderId || Date.now();
+    const invoiceNo = `${prefix}${core}`;
     
     // Create sale record in Prokip
     const sellBody = {
