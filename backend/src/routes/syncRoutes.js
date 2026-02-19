@@ -35,6 +35,11 @@ router.use(async (req, res, next) => {
         req.user = { id: prokipConfig.userId };
         return next();
       } else {
+        // Last chance: allow globally configured PROKIP_ECOM_TOKEN for system triggers
+        if (process.env.PROKIP_ECOM_TOKEN && token === process.env.PROKIP_ECOM_TOKEN) {
+          req.userId = prokipConfig?.userId || null;
+          return next();
+        }
         return res.status(403).json({ error: 'Invalid or expired token' });
       }
     } catch (dbError) {

@@ -43,10 +43,35 @@ async function ensureDefaultUser() {
 }
 
 // Middleware
+const defaultDevOrigins = ['http://localhost:3000', 'http://localhost:3001'];
+const allowedOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://yourdomain.com'] // Add your production domains
-    : ['http://localhost:3000', 'http://localhost:3001'],
+  origin: (origin, callback) => {
+    // Allow same-origin/server-to-server requests without an Origin header.
+    if (!origin) return callback(null, true);
+
+    const originsToCheck =
+      allowedOrigins.length > 0
+        ? allowedOrigins
+        : (process.env.NODE_ENV === 'production' ? [] : defaultDevOrigins);
+
+    // Support wildcard patterns like https://*.vercel.app
+    const isAllowed = originsToCheck.some(rule => {
+      if (rule === '*') return true;
+      if (!rule.includes('*')) return rule === origin;
+      const escapedRule = rule
+        .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '.*');
+      return new RegExp(`^${escapedRule}$`).test(origin);
+    });
+
+    if (isAllowed) return callback(null, true);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
   credentials: true,
   optionsSuccessStatus: 200
 };

@@ -83,26 +83,32 @@ async function ensureProkipStoreId(localStoreId, userId) {
   if (!connection) return null;
 
   try {
+    let remoteConnect = null;
     if (connection.platform === 'woocommerce') {
       const { consumerKey, consumerSecret } = decryptCredentials(connection);
-      await prokipEcomClient.connectStore({
+      remoteConnect = await prokipEcomClient.connectStore({
         platform: 'woocommerce',
         store_url: connection.storeUrl,
         api_key: consumerKey,
         api_secret: consumerSecret
       }, userId);
     } else if (connection.platform === 'shopify') {
-      await prokipEcomClient.connectStore({
+      remoteConnect = await prokipEcomClient.connectStore({
         platform: 'shopify',
         store_url: connection.storeUrl,
         access_token: connection.accessToken
       }, userId);
     }
+
+    const newId = remoteConnect?.store_id || remoteConnect?.id || null;
+    if (newId) return newId;
   } catch (error) {
-    return null;
+    console.error('ensureProkipStoreId connectStore failed:', error.message);
   }
 
-  return await resolveProkipStoreId(localStoreId, userId);
+  // Last attempt after connect; if still missing, fall back to local store id
+  const retry = await resolveProkipStoreId(localStoreId, userId);
+  return retry || parseInt(localStoreId, 10) || null;
 }
 
 async function resolveConnection(storeId, userId) {
@@ -290,9 +296,12 @@ router.post('/sync-products', async (req, res) => {
         });
       }
 
+      try {
+    let wooProducts;
+    try {
       const { consumerKey, consumerSecret } = decryptCredentials(connection);
       const appPassword = decryptAppPassword(connection);
-      const wooProducts = await getWooProducts(
+      wooProducts = await getWooProducts(
         connection.storeUrl,
         consumerKey,
         consumerSecret,
@@ -302,6 +311,12 @@ router.post('/sync-products', async (req, res) => {
         appPassword,
         { per_page: limit, page }
       );
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: `Failed to fetch WooCommerce products: ${err.message}`
+      });
+    }
 
       let wooProductsToImport = wooProducts || [];
       if (!overwriteStock) {
@@ -381,6 +396,10 @@ router.post('/sync-products', async (req, res) => {
         prokip_import: prokipImport,
         message: `Products synced successfully (${synced})`
       });
+      } catch (localErr) {
+        console.warn('Local mode sync-products failed, falling back to remote pipeline:', localErr.message);
+        // fall through to remote flow below
+      }
     }
 
     const resolvedStoreId = await ensureProkipStoreId(store_id, userId);
@@ -455,13 +474,6 @@ async function handlePushProducts(req, res) {
       });
     }
 
-    if (process.env.PROKIP_LOCAL_AUTH !== 'true') {
-      return res.status(400).json({
-        success: false,
-        message: 'Push products is only supported in local Prokip mode for now'
-      });
-    }
-
     const connection = await resolveConnection(store_id, userId);
     if (!connection) {
       return res.status(404).json({
@@ -477,17 +489,30 @@ async function handlePushProducts(req, res) {
       });
     }
 
-    const prokipConfig = await prisma.prokipConfig.findFirst({ where: { userId } });
-    const locationId = prokipConfig?.locationId ? parseInt(prokipConfig.locationId, 10) : null;
-    if (!locationId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please select a Prokip business location before pushing products'
-      });
+    // If remote mode, pull products from Prokip via API; else use local DB
+    let productsToPush = [];
+    if (process.env.PROKIP_LOCAL_AUTH === 'true') {
+      const prokipConfig = await prisma.prokipConfig.findFirst({ where: { userId } });
+      const locationId = prokipConfig?.locationId ? parseInt(prokipConfig.locationId, 10) : null;
+      if (!locationId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please select a Prokip business location before pushing products'
+        });
+      }
+      const prokipProducts = await prokipLocalAuthService.getProducts(locationId);
+      productsToPush = (prokipProducts || []).slice(0, Math.max(0, parseInt(limit, 10) || 0));
+    } else {
+      const prokipProducts = await prokipEcomClient.getProducts({ limit, page: 1 }, userId);
+      const list = Array.isArray(prokipProducts?.data) ? prokipProducts.data : (prokipProducts?.products || prokipProducts || []);
+      productsToPush = (list || []).slice(0, Math.max(0, parseInt(limit, 10) || 0)).map(p => ({
+        id: p.id,
+        sku: p.sku || p.id,
+        name: p.name || p.title || 'Product',
+        stock_quantity: p.qty_available ?? p.quantity ?? 0,
+        price: p.sell_price_inc_tax || p.price || p.default_sell_price || p.regular_price || 0
+      }));
     }
-
-    const prokipProducts = await prokipLocalAuthService.getProducts(locationId);
-    const productsToPush = (prokipProducts || []).slice(0, Math.max(0, parseInt(limit, 10) || 0));
 
     // Fetch current Woo products to avoid pushing duplicates
     let existingWooSkus = new Set();
@@ -577,8 +602,8 @@ async function handlePushProducts(req, res) {
     return res.json({
       success: true,
       store_id: connection.id,
-      locationId,
-      products_found: prokipProducts?.length || 0,
+      locationId: locationId || null,
+      products_found: productsToPush?.length || 0,
       products_attempted: productsToPush.length,
       products_pushed: pushed,
       products_failed: failed,
@@ -587,7 +612,7 @@ async function handlePushProducts(req, res) {
       message: `Push completed: ${pushed} pushed, ${skippedExisting} skipped (already in Woo), ${failed} failed`
     });
   } catch (error) {
-    console.error('Push products error:', error);
+    console.error('Push products error:', error.response?.data || error.message, error.stack);
     res.status(500).json({
       success: false,
       message: 'Failed to push products',
@@ -974,12 +999,8 @@ router.post('/sync-orders', async (req, res) => {
           return res.json(prokipToWooResult);
         }
       } catch (err) {
-        console.error('Local Prokip sync-orders error:', err);
-        return res.status(200).json({
-          success: false,
-          message: 'Failed to sync Prokip sales to WooCommerce',
-          error: err.message
-        });
+        console.error('Local Prokip sync-orders error, falling back to remote pipeline:', err);
+        // continue to remote Woo -> Prokip path
       }
     }
 
@@ -1303,6 +1324,16 @@ router.get('/sync-status/:store_id', async (req, res) => {
         success: false,
         message: 'Connection not found for this user'
       });
+    }
+
+    if (process.env.PROKIP_LOCAL_AUTH !== 'true') {
+      const resolvedStoreId = await ensureProkipStoreId(store_id, userId);
+      if (!resolvedStoreId) {
+        return res.status(404).json({
+          success: false,
+          message: 'Store not connected in Prokip. Please reconnect the store in Prokip dashboard.'
+        });
+      }
     }
 
     if (process.env.PROKIP_LOCAL_AUTH === 'true') {

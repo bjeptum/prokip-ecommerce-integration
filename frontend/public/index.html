@@ -1,42 +1,69 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Prokip - E-commerce Integration</title>
-  <link rel="stylesheet" href="styles.css">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-</head>
+	  <meta charset="UTF-8">
+	  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+	  <title>Prokip - E-commerce Integration</title>
+	  <link rel="icon" type="image/png" href="/prokip_logo.png">
+    <meta name="api-base-url" content="https://prokip-ecommerce-integration-deployed.onrender.com/">
+	  <link rel="stylesheet" href="styles.css">
+	  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+	</head>
 <body>
-  <!-- Prokip Login Screen -->
-  <div id="login-screen" class="login-screen">
+  <!-- Login Screen -->
+  <div id="login-screen" class="login-screen" style="display: none;">
     <div class="login-container">
       <div class="login-header">
         <img src="/prokip_logo.png" alt="Prokip Logo" class="logo">
         <h1>Welcome to Prokip</h1>
-        <p>Sign in with your Prokip account to manage your e-commerce integration</p>
+        <p>Connect your e-commerce stores and manage inventory seamlessly</p>
       </div>
 
       <div class="login-form">
         <div class="form-group">
-          <label for="prokip-username">Prokip Username</label>
+          <label for="username">Username</label>
+          <input type="text" id="username" placeholder="Enter your username" />
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" placeholder="Enter your password" />
+        </div>
+
+        <button onclick="login()" class="btn-primary" id="login-btn">
+          <span id="login-btn-text">Sign In</span>
+          <span id="login-spinner" class="button-spinner" style="display: none;"></span>
+        </button>
+        <p id="login-error" class="error-message"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prokip Connect Screen -->
+  <div id="prokip-connect-screen" class="login-screen">
+    <div class="login-container">
+      <div class="login-header">
+        <img src="/prokip_logo.png" alt="Prokip Logo" class="logo">
+        <h1>Connect Prokip</h1>
+        <p>Sign in to Prokip to load your business locations</p>
+      </div>
+
+      <div class="login-form">
+        <div class="form-group">
+          <label for="prokip-username">Prokip Username or Email</label>
           <input type="text" id="prokip-username" placeholder="Enter your Prokip username" />
         </div>
 
         <div class="form-group">
-          <label for="prokip-password">Password</label>
-          <input type="password" id="prokip-password" placeholder="Enter your password" />
+          <label for="prokip-password">Prokip Password</label>
+          <input type="password" id="prokip-password" placeholder="Enter your Prokip password" />
         </div>
 
-        <button onclick="loginToProkip()" class="btn-primary" id="login-btn">
-          <span id="login-btn-text">Sign In to Prokip</span>
-          <i id="login-spinner" class="fas fa-spinner fa-spin" style="display: none;"></i>
+        <button onclick="connectProkip()" class="btn-primary" id="prokip-login-btn">
+          <span id="prokip-login-btn-text">Connect Prokip</span>
+          <span id="prokip-login-spinner" class="button-spinner" style="display: none;"></span>
         </button>
-        <p id="login-error" class="error-message"></p>
-        
-        <div class="login-info">
-          <p><i class="fas fa-lock"></i> Your credentials are securely sent to Prokip. We never store your password.</p>
-        </div>
+        <p id="prokip-login-error" class="error-message"></p>
       </div>
     </div>
   </div>
@@ -47,7 +74,7 @@
       <div class="location-header">
         <img src="/prokip_logo.png" alt="Prokip Logo" class="logo">
         <h1>Select Business Location</h1>
-        <p>Choose which business location you want to sync with your online stores</p>
+        <p>Choose which business location you want to work with</p>
       </div>
 
       <div id="locations-grid" class="locations-grid">
@@ -55,7 +82,7 @@
       </div>
 
       <div class="location-footer">
-        <button onclick="logoutFromProkip()" class="btn-secondary">
+        <button onclick="logout()" class="btn-secondary">
           <i class="fas fa-sign-out-alt"></i> Logout
         </button>
       </div>
@@ -75,19 +102,19 @@
           <i class="fas fa-home"></i>
           <span>Home</span>
         </li>
-        <li class="menu-item" data-page="prokip-operations" onclick="navigateTo('prokip-operations')">
-          <i class="fas fa-warehouse"></i>
-          <span>Prokip Operations</span>
-        </li>
         <li class="menu-item" data-page="settings" onclick="navigateTo('settings')">
           <i class="fas fa-cog"></i>
           <span>Settings</span>
+        </li>
+        <li class="menu-item" data-page="prokip-operations" onclick="navigateTo('prokip-operations')">
+          <i class="fas fa-store"></i>
+          <span>Prokip</span>
         </li>
       </ul>
       
       <!-- Store-specific menu items (hidden initially) -->
       <div id="store-menu-section" style="display: none;">
-        <div class="menu-section-title" id="store-menu-title">Connected Store</div>
+        <div class="menu-section-title" id="store-menu-title">Current Store</div>
         <ul class="sidebar-menu">
           <li class="menu-item" data-page="store-products" onclick="navigateTo('store-products')">
             <i class="fas fa-box"></i>
@@ -97,13 +124,9 @@
             <i class="fas fa-shopping-cart"></i>
             <span>Orders</span>
           </li>
-          <li class="menu-item" data-page="store-sales" onclick="navigateTo('store-sales')">
-            <i class="fas fa-cash-register"></i>
-            <span>Sales</span>
-          </li>
           <li class="menu-item" data-page="store-analytics" onclick="navigateTo('store-analytics')">
             <i class="fas fa-chart-bar"></i>
-            <span>Analytics</span>
+            <span>Dashboard</span>
           </li>
         </ul>
       </div>
@@ -171,7 +194,7 @@
             </div>
             <div class="stat-content">
               <div class="stat-number" id="total-orders">0</div>
-              <div class="stat-label">Total Transactions</div>
+              <div class="stat-label">Total Orders</div>
             </div>
           </div>
 
@@ -179,48 +202,12 @@
             <div class="stat-icon">
               <i class="fas fa-sync"></i>
             </div>
-            <div class="stat-content">
-              <div class="stat-number" id="dashboard-sync-status">Active</div>
-              <div class="stat-label">Sync Status</div>
-            </div>
+          <div class="stat-content">
+            <div class="stat-number" id="dashboard-sync-status">Active</div>
+            <div class="stat-label">Sync Status</div>
           </div>
         </div>
-
-        <!-- Prokip Transaction Summary -->
-        <div class="prokip-summary">
-          <h2>Prokip Operations Summary</h2>
-          <div class="prokip-stats-grid">
-            <div class="prokip-stat-card">
-              <div class="stat-icon">
-                <i class="fas fa-box-open"></i>
-              </div>
-              <div class="stat-content">
-                <div class="stat-number" id="prokip-products">0</div>
-                <div class="stat-label">Products Created</div>
-              </div>
-            </div>
-
-            <div class="prokip-stat-card">
-              <div class="stat-icon">
-                <i class="fas fa-cash-register"></i>
-              </div>
-              <div class="stat-content">
-                <div class="stat-number" id="prokip-sales">0</div>
-                <div class="stat-label">Sales Recorded</div>
-              </div>
-            </div>
-
-            <div class="prokip-stat-card">
-              <div class="stat-icon">
-                <i class="fas fa-shopping-bag"></i>
-              </div>
-              <div class="stat-content">
-                <div class="stat-number" id="prokip-purchases">0</div>
-                <div class="stat-label">Purchases Recorded</div>
-              </div>
-            </div>
-          </div>
-        </div>
+      </div>
 
         <div class="stores-overview">
           <h2>Your Connected Stores</h2>
@@ -308,13 +295,127 @@
             <div id="stores-list" class="stores-list">
               <!-- Connected stores will be populated here -->
             </div>
-            <div style="margin-top: 16px; display: flex; gap: 12px; justify-content: center;">
-              <button onclick="showSyncErrors()" class="btn-secondary" style="font-size: 14px;">
-                <i class="fas fa-exclamation-triangle"></i> View Sync Errors
-              </button>
+            <div style="margin-top: 16px; text-align: center;">
               <button onclick="navigateTo('home')" class="btn-secondary" style="font-size: 14px;">
                 <i class="fas fa-arrow-left"></i> Back to Dashboard
               </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Prokip Operations Page -->
+      <div id="prokip-operations-page" class="page">
+        <div class="page-header">
+          <h1>Prokip Dashboard</h1>
+          <p>View Prokip products, sales, purchases and manage WooCommerce sync.</p>
+        </div>
+
+        <div class="prokip-operations-content">
+          <div class="prokip-summary">
+            <h2>Prokip Summary</h2>
+            <div class="prokip-stats-grid">
+              <div class="prokip-stat-card">
+                <div class="stat-icon"><i class="fas fa-box"></i></div>
+                <div class="stat-content">
+                  <div class="stat-number" id="prokip-products">0</div>
+                  <div class="stat-label">Products</div>
+                </div>
+              </div>
+              <div class="prokip-stat-card">
+                <div class="stat-icon"><i class="fas fa-shopping-cart"></i></div>
+                <div class="stat-content">
+                  <div class="stat-number" id="prokip-sales">0</div>
+                  <div class="stat-label">Sales</div>
+                </div>
+              </div>
+              <div class="prokip-stat-card">
+                <div class="stat-icon"><i class="fas fa-truck-loading"></i></div>
+                <div class="stat-content">
+                  <div class="stat-number" id="prokip-purchases">0</div>
+                  <div class="stat-label">Purchases</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="operations-grid">
+            <div class="operation-card">
+              <div class="operation-icon">
+                <i class="fas fa-plug"></i>
+              </div>
+              <div class="operation-info">
+                <h3>WooCommerce Sync</h3>
+                <p>Select a store, then sync orders to Prokip (stock deduction) or pull products from WooCommerce.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="prokip-store-select">Connected Store</label>
+                <select id="prokip-store-select" onchange="handleProkipStoreChange()">
+                  <option value="">No stores connected</option>
+                </select>
+              </div>
+
+              <div class="ecom-sync-status" id="ecom-sync-status-panel">
+                <div class="ecom-sync-header">
+                  <strong id="ecom-sync-store">No store selected</strong>
+                </div>
+                <div class="ecom-sync-grid">
+                  <div class="ecom-sync-item">
+                    <span class="label">Last Sync</span>
+                    <span class="value" id="ecom-sync-last">—</span>
+                  </div>
+                  <div class="ecom-sync-item">
+                    <span class="label">Products Synced</span>
+                    <span class="value" id="ecom-sync-products">0</span>
+                  </div>
+                  <div class="ecom-sync-item">
+                    <span class="label">Orders Synced</span>
+                    <span class="value" id="ecom-sync-orders">0</span>
+                  </div>
+                </div>
+                <div class="ecom-sync-message" id="ecom-sync-message">Connect a store to view sync status.</div>
+              </div>
+
+              <div class="prokip-sync-actions">
+                <button id="sync-woocommerce-btn" onclick="syncWithWooCommerce()" class="btn-primary">
+                  <span id="sync-btn-text">Sync with WooCommerce</span>
+                  <span id="sync-spinner" class="button-spinner" style="display: none;"></span>
+                </button>
+                <button onclick="pushProductsToProkip()" class="btn-secondary">
+                  <i class="fas fa-download"></i> Pull Products from WooCommerce
+                </button>
+              </div>
+
+              <div id="sync-status" class="sync-status" style="display: none;">
+                <div class="status-message">Ready to sync</div>
+                <div class="status-details"></div>
+              </div>
+            </div>
+
+          </div>
+
+          <div class="prokip-tabs">
+            <button class="prokip-tab active" data-tab="products" onclick="showProkipTab('products')">
+              <i class="fas fa-box"></i> Products
+            </button>
+            <button class="prokip-tab" data-tab="sales" onclick="showProkipTab('sales')">
+              <i class="fas fa-shopping-cart"></i> Sales
+            </button>
+            <button class="prokip-tab" data-tab="purchases" onclick="showProkipTab('purchases')">
+              <i class="fas fa-truck-loading"></i> Purchases
+            </button>
+          </div>
+
+          <div class="prokip-tab-panels">
+            <div id="prokip-tab-products" class="prokip-tab-panel active">
+              <div id="prokip-products-list" class="operations-list"></div>
+            </div>
+            <div id="prokip-tab-sales" class="prokip-tab-panel">
+              <div id="prokip-sales-list" class="operations-list"></div>
+            </div>
+            <div id="prokip-tab-purchases" class="prokip-tab-panel">
+              <div id="prokip-purchases-list" class="operations-list"></div>
             </div>
           </div>
         </div>
@@ -352,157 +453,153 @@
         </div>
       </div>
 
-      <!-- Store Sales Page -->
-      <div id="store-sales-page" class="page">
-        <div class="page-header">
-          <h1>Sales</h1>
-          <p id="store-sales-subtitle">Sync sales from the selected store</p>
-          <div class="page-actions">
-            <button onclick="syncStoreSales()" class="btn-primary">
-              <i class="fas fa-sync"></i> Sync Sales
-            </button>
-            <button onclick="showSalesSettings()" class="btn-secondary">
-              <i class="fas fa-cog"></i> Settings
-            </button>
-          </div>
-        </div>
-        <div class="sales-content" id="sales-content">
-          <div class="sales-overview">
-            <div class="sales-stats-grid">
-              <div class="sales-stat-card">
-                <div class="stat-icon">
-                  <i class="fas fa-dollar-sign"></i>
-                </div>
-                <div class="stat-content">
-                  <div class="stat-number" id="total-sales">0</div>
-                  <div class="stat-label">Total Sales</div>
-                </div>
-              </div>
-              <div class="sales-stat-card">
-                <div class="stat-icon">
-                  <i class="fas fa-shopping-cart"></i>
-                </div>
-                <div class="stat-content">
-                  <div class="stat-number" id="sales-count">0</div>
-                  <div class="stat-label">Sales Count</div>
-                </div>
-              </div>
-              <div class="sales-stat-card">
-                <div class="stat-icon">
-                  <i class="fas fa-calendar"></i>
-                </div>
-                <div class="stat-content">
-                  <div class="stat-number" id="last-sync">Never</div>
-                  <div class="stat-label">Last Sync</div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="sales-list" id="sales-list">
-            <!-- Sales will be loaded here -->
-          </div>
-        </div>
-      </div>
-
       <!-- Store Analytics Page -->
       <div id="store-analytics-page" class="page">
         <div class="page-header">
-          <h1>Analytics</h1>
-          <p id="store-analytics-subtitle">View analytics for the selected store</p>
+          <h1>E-commerce Dashboard</h1>
+          <p id="store-analytics-subtitle">Overview for the selected store</p>
         </div>
         <div class="analytics-content" id="analytics-content">
-          <!-- Analytics will be loaded here -->
-        </div>
-      </div>
-
-      <!-- Prokip Operations Page -->
-      <div id="prokip-operations-page" class="page">
-        <div class="page-header">
-          <h1>Prokip Operations</h1>
-          <p>View your products, sales, and purchases from Prokip</p>
-          
-          <!-- WooCommerce Sync Button -->
-          <div class="sync-section">
-            <div class="sync-header">
-              <h2><i class="fas fa-exchange-alt"></i> WooCommerce Sync</h2>
-              <p>Synchronize inventory between Prokip and WooCommerce</p>
+          <div class="store-dashboard">
+            <div class="store-kpis">
+              <div class="kpi-card">
+                <div class="kpi-icon"><i class="fas fa-shopping-cart"></i></div>
+                <div class="kpi-content">
+                  <div class="kpi-value" id="store-dashboard-orders">0</div>
+                  <div class="kpi-label">Orders</div>
+                </div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-icon"><i class="fas fa-coins"></i></div>
+                <div class="kpi-content">
+                  <div class="kpi-value" id="store-dashboard-sales">0</div>
+                  <div class="kpi-label">Sales</div>
+                </div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-icon"><i class="fas fa-sync"></i></div>
+                <div class="kpi-content">
+                  <div class="kpi-value" id="store-dashboard-sync">Not synced</div>
+                  <div class="kpi-label">Last Sync</div>
+                </div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-icon"><i class="fas fa-globe"></i></div>
+                <div class="kpi-content">
+                  <div class="kpi-value" id="store-dashboard-platform">Store</div>
+                  <div class="kpi-label">Platform</div>
+                </div>
+              </div>
             </div>
-            
-            <div class="sync-controls">
-              <button onclick="syncWithWooCommerce()" class="btn-primary btn-large" id="sync-woocommerce-btn">
-                <i class="fas fa-sync-alt"></i>
-                <span id="sync-btn-text">Sync with WooCommerce</span>
-                <i id="sync-spinner" class="fas fa-spinner fa-spin" style="display: none;"></i>
-              </button>
-              
-              <div class="sync-info">
-                <div class="sync-direction">
-                  <div class="direction-item">
-                    <i class="fas fa-arrow-right"></i>
-                    <span>WooCommerce Sales → Prokip Stock Deduction</span>
+
+            <div class="store-panels">
+              <div class="store-panel">
+                <div class="panel-header">
+                  <h3>Recent Orders</h3>
+                  <span class="panel-meta" id="store-dashboard-orders-meta">—</span>
+                </div>
+                <div id="store-recent-orders" class="panel-body">
+                  <div class="empty-state">
+                    <i class="fas fa-receipt"></i>
+                    <p>No orders loaded yet</p>
                   </div>
-                  <div class="direction-item">
-                    <i class="fas fa-arrow-left"></i>
-                    <span>Prokip Sales → WooCommerce Stock Deduction</span>
+                </div>
+              </div>
+
+              <div class="store-panel">
+                <div class="panel-header">
+                  <h3>Sales Summary</h3>
+                  <span class="panel-meta" id="store-dashboard-sales-meta">—</span>
+                </div>
+                <div id="store-sales-summary" class="panel-body">
+                  <div class="empty-state">
+                    <i class="fas fa-chart-line"></i>
+                    <p>No sales data loaded yet</p>
                   </div>
                 </div>
               </div>
             </div>
-            
-            <div id="sync-status" class="sync-status" style="display: none;">
-              <div class="status-message"></div>
-              <div class="status-details"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Product Source Modal -->
+      <div id="product-source-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>Choose Product Setup Method</h2>
+            <button class="modal-close" onclick="closeModal()"><i class="fas fa-times"></i></button>
+          </div>
+          <div class="modal-body">
+            <p class="modal-lead">Pick how you want Prokip to sync products for this store.</p>
+            <div class="source-options">
+              <button class="card-button" onclick="selectProductSource('pull')">
+                <h3>Use products from my online store</h3>
+                <p>Pull products from Shopify/WooCommerce into Prokip. Keep your existing online catalog.</p>
+              </button>
+              <button class="card-button" onclick="selectProductSource('push')">
+                <h3>Use products from Prokip</h3>
+                <p>Publish Prokip products to your store. Great if Prokip is your source of truth.</p>
+              </button>
             </div>
           </div>
         </div>
+      </div>
 
-        <div class="prokip-operations-content">
-          <!-- Products Section -->
-          <div class="products-section">
-            <div class="section-header">
-              <h2><i class="fas fa-boxes"></i> Products in Prokip</h2>
-              <button onclick="loadProkipProducts()" class="btn-secondary">
-                <i class="fas fa-sync"></i> Refresh
-              </button>
+      <!-- Product Matching Modal (Pull) -->
+      <div id="product-matching-modal" class="modal">
+        <div class="modal-content wide">
+          <div class="modal-header">
+            <h2>Product Matching</h2>
+            <button class="modal-close" onclick="closeModal()"><i class="fas fa-times"></i></button>
+          </div>
+          <div class="modal-body">
+            <div id="matching-summary" class="matching-summary"></div>
+            <div class="tab-buttons">
+              <button class="tab-btn active" onclick="showMatchingTab('matched', event)">Matched</button>
+              <button class="tab-btn" onclick="showMatchingTab('unmatched-prokip', event)">Prokip only</button>
+              <button class="tab-btn" onclick="showMatchingTab('unmatched-store', event)">Store only</button>
             </div>
-            <div id="prokip-products-list" class="products-list">
-              <div class="empty-state">
-                <i class="fas fa-boxes"></i>
-                <p>Loading products...</p>
-              </div>
+            <div id="matching-content" class="matching-content"></div>
+            <div class="modal-actions">
+              <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+              <button class="btn-primary" onclick="confirmMatches()">
+                <i class="fas fa-download"></i> Pull products into Prokip
+              </button>
             </div>
           </div>
+        </div>
+      </div>
 
-          <!-- Sales Section -->
-          <div class="sales-section">
-            <div class="section-header">
-              <h2><i class="fas fa-cash-register"></i> Recent Sales</h2>
-              <button onclick="loadProkipSales()" class="btn-secondary">
-                <i class="fas fa-sync"></i> Refresh
+      <!-- Product Readiness Modal (Push) -->
+      <div id="product-readiness-modal" class="modal">
+        <div class="modal-content wide">
+          <div class="modal-header">
+            <h2>Publish Products to Store</h2>
+            <button class="modal-close" onclick="closeModal()"><i class="fas fa-times"></i></button>
+          </div>
+          <div class="modal-body">
+            <div id="readiness-summary"></div>
+            <div id="readiness-products" class="readiness-products"></div>
+            <div class="modal-actions">
+              <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+              <button id="publish-btn" class="btn-primary" onclick="publishProducts()">
+                <i class="fas fa-cloud-upload-alt"></i> Publish to Store
               </button>
-            </div>
-            <div id="prokip-sales-list" class="sales-list">
-              <div class="empty-state">
-                <i class="fas fa-cash-register"></i>
-                <p>Loading sales...</p>
-              </div>
             </div>
           </div>
+        </div>
+      </div>
 
-          <!-- Purchases Section -->
-          <div class="purchases-section">
-            <div class="section-header">
-              <h2><i class="fas fa-shopping-bag"></i> Recent Purchases</h2>
-              <button onclick="loadProkipPurchases()" class="btn-secondary">
-                <i class="fas fa-sync"></i> Refresh
-              </button>
-            </div>
-            <div id="prokip-purchases-list" class="purchases-list">
-              <div class="empty-state">
-                <i class="fas fa-shopping-bag"></i>
-                <p>Loading purchases...</p>
-              </div>
-            </div>
+      <!-- Sync Errors Modal -->
+      <div id="sync-errors-modal" class="modal">
+        <div class="modal-content wide">
+          <div class="modal-header">
+            <h2>Sync Issues</h2>
+            <button class="modal-close" onclick="closeModal()"><i class="fas fa-times"></i></button>
+          </div>
+          <div class="modal-body">
+            <div id="errors-list"></div>
           </div>
         </div>
       </div>
@@ -526,14 +623,10 @@
                 <li>You'll be redirected to Shopify to approve the connection</li>
                 <li>Once approved, you'll be redirected back and the store will be connected</li>
               </ol>
-              <div class="reassurance-box">
-                <i class="fas fa-shield-alt"></i>
-                <p><strong>Secure Connection:</strong> Prokip will never see your password. You'll approve access directly on Shopify's secure site.</p>
-              </div>
             </div>
 
             <div class="form-group">
-              <label for="shopify-store-url">Store URL *</label>
+              <label for="shopify-store-url">Store URL</label>
               <input type="text" id="shopify-store-url" placeholder="mystore.myshopify.com" />
               <small class="form-help">Enter your Shopify store URL without https://</small>
             </div>
@@ -545,342 +638,74 @@
         </div>
       </div>
 
-      <!-- WooCommerce Connection Modal -->
-      <div id="woocommerce-modal" class="modal">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h2>Connect WooCommerce Store</h2>
-            <button class="modal-close" onclick="closeModal()">
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
+	      <!-- WooCommerce Connection Modal -->
+	      <div id="woocommerce-modal" class="modal">
+	        <div class="modal-content">
+	          <div class="modal-header">
+	            <h2>Connect WooCommerce Store</h2>
+	            <button class="modal-close" onclick="closeModal()">
+	              <i class="fas fa-times"></i>
+	            </button>
+	          </div>
 
-          <div class="modal-body">
-            <div class="connection-instructions">
-              <h3>Connect Your WooCommerce Store</h3>
-              <p>Enter your store URL and WooCommerce Consumer Key/Secret for secure API access.</p>
-            </div>
+	          <div class="modal-body">
+	            <div class="connection-instructions">
+	              <h3>Connect without API keys</h3>
+	              <ol>
+	                <li>In WordPress, open <strong>Users → Your Profile</strong>.</li>
+	                <li>Create an <strong>Application Password</strong> (name it “Prokip Sync”).</li>
+	                <li>Copy the generated password and paste it below with your admin email/username.</li>
+	                <li>Click Connect – you’ll stay in Prokip, no secret keys needed.</li>
+	              </ol>
+	              <div class="permission-summary">
+	                <strong>Prokip will request:</strong>
+	                <ul>
+	                  <li>Read products & orders</li>
+	                  <li>Update stock levels</li>
+	                  <li>Register inventory webhooks</li>
+	                </ul>
+	              </div>
+	            </div>
 
-            <div class="form-group">
-              <label for="woo-store-url">Store URL *</label>
-              <input type="url" id="woo-store-url" placeholder="https://yourstore.com" />
-              <small class="form-help">Your WooCommerce store URL (include https://)</small>
-            </div>
+	            <div class="form-group">
+	              <label for="woo-store-name">Store Name (Optional)</label>
+	              <input type="text" id="woo-store-name" placeholder="My WooCommerce Store" />
+	              <small class="form-help">Used only for display in your connected stores list</small>
+	            </div>
 
-            <div class="form-group">
-              <label for="woo-consumer-key">Consumer Key *</label>
-              <input type="text" id="woo-consumer-key" placeholder="ck_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-              <small class="form-help">Found in WooCommerce → Settings → Advanced → REST API</small>
-            </div>
+	            <div class="form-group">
+	              <label for="woo-store-url">Store URL</label>
+	              <input type="text" id="woo-store-url" placeholder="https://mystore.com" />
+	              <small class="form-help">Use the full URL (including https://). No trailing slash is recommended.</small>
+	            </div>
 
-            <div class="form-group">
-              <label for="woo-consumer-secret">Consumer Secret *</label>
-              <input type="password" id="woo-consumer-secret" placeholder="cs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-              <small class="form-help">Keep this secret - it's like a password</small>
-            </div>
+	            <div class="form-group">
+	              <label for="woo-admin-user">Admin Email or Username</label>
+	              <input type="text" id="woo-admin-user" placeholder="you@store.com" autocomplete="username" />
+	              <small class="form-help">This is the account where you created the application password.</small>
+	            </div>
 
-            <div class="form-group">
-              <label for="woo-store-name">Store Name (Optional)</label>
-              <input type="text" id="woo-store-name" placeholder="My Store" />
-              <small class="form-help">A friendly name to identify your store</small>
-            </div>
+	            <div class="form-group">
+	              <label for="woo-app-password">Application Password</label>
+	              <input type="password" id="woo-app-password" placeholder="abcd efgh ijkl mnop" autocomplete="new-password" />
+	              <small class="form-help">Paste the full password (WordPress shows it spaced).</small>
+	            </div>
 
-            <div class="connection-buttons">
-              <button onclick="testWooCommerceConnection()" class="btn-secondary" id="test-woo-btn">
-                <i class="fas fa-check-circle"></i> Test Connection
-              </button>
-              <button onclick="connectWooCommerceStore()" class="btn-primary" id="connect-woo-btn">
-                <i class="fas fa-shopping-cart"></i> Connect Store
-              </button>
-            </div>
+	            <div id="woo-connection-status" class="woo-connection-status" style="display: none;"></div>
 
-            <div id="woo-connection-status" class="connection-status" style="display: none;"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Create Product Modal -->
-      <div id="create-product-modal" class="modal">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h2>Create New Product</h2>
-            <button class="modal-close" onclick="closeModal()">
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
-
-          <div class="modal-body">
-            <div class="form-group">
-              <label for="product-name">Product Name *</label>
-              <input type="text" id="product-name" placeholder="e.g., Premium T-Shirt" required />
-            </div>
-
-            <div class="form-group">
-              <label for="product-sku">SKU *</label>
-              <input type="text" id="product-sku" placeholder="e.g., TSHIRT-001" required />
-              <small class="form-help">Unique product identifier</small>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group">
-                <label for="product-sell-price">Sell Price *</label>
-                <input type="number" id="product-sell-price" placeholder="0.00" step="0.01" min="0" required />
-              </div>
-
-              <div class="form-group">
-                <label for="product-purchase-price">Purchase Price *</label>
-                <input type="number" id="product-purchase-price" placeholder="0.00" step="0.01" min="0" required />
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label for="product-quantity">Initial Quantity *</label>
-              <input type="number" id="product-quantity" placeholder="0" step="1" min="0" required />
-            </div>
-
-            <div class="form-group">
-              <label for="product-description">Description</label>
-              <textarea id="product-description" rows="3" placeholder="Product description (optional)"></textarea>
-            </div>
-
-            <div id="create-product-result" class="operation-result" style="display: none;"></div>
-
-            <button onclick="createProduct()" class="btn-primary">
-              <i class="fas fa-check"></i> Create Product
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Record Sale Modal -->
-      <div id="record-sale-modal" class="modal">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h2>Record Sale</h2>
-            <button class="modal-close" onclick="closeModal()">
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
-
-          <div class="modal-body">
-            <div class="form-group">
-              <label for="sale-customer-name">Customer Name</label>
-              <input type="text" id="sale-customer-name" placeholder="e.g., John Doe" />
-            </div>
-
-            <div class="sale-items-section">
-              <label>Sale Items *</label>
-              <div id="sale-items-list">
-                <div class="sale-item-row">
-                  <div class="form-group">
-                    <input type="text" class="sale-item-sku" placeholder="SKU" required />
-                  </div>
-                  <div class="form-group">
-                    <input type="number" class="sale-item-quantity" placeholder="Quantity" step="1" min="1" required />
-                  </div>
-                  <div class="form-group">
-                    <input type="number" class="sale-item-price" placeholder="Unit Price" step="0.01" min="0" required />
-                  </div>
-                  <button type="button" class="btn-icon" onclick="removeSaleItem(this)" disabled>
-                    <i class="fas fa-trash"></i>
-                  </button>
-                </div>
-              </div>
-              <button type="button" onclick="addSaleItem()" class="btn-secondary">
-                <i class="fas fa-plus"></i> Add Item
-              </button>
-            </div>
-
-            <div class="form-group">
-              <label for="sale-discount">Discount</label>
-              <input type="number" id="sale-discount" placeholder="0.00" step="0.01" min="0" value="0" />
-            </div>
-
-            <div id="record-sale-result" class="operation-result" style="display: none;"></div>
-
-            <button onclick="recordSale()" class="btn-primary">
-              <i class="fas fa-check"></i> Record Sale
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Record Purchase Modal -->
-      <div id="record-purchase-modal" class="modal">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h2>Record Purchase</h2>
-            <button class="modal-close" onclick="closeModal()">
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
-
-          <div class="modal-body">
-            <div class="form-group">
-              <label for="purchase-supplier-name">Supplier Name *</label>
-              <input type="text" id="purchase-supplier-name" placeholder="e.g., Acme Supplies Inc." required />
-            </div>
-
-            <div class="purchase-items-section">
-              <label>Purchase Items *</label>
-              <div id="purchase-items-list">
-                <div class="purchase-item-row">
-                  <div class="form-group">
-                    <input type="text" class="purchase-item-sku" placeholder="SKU" required />
-                  </div>
-                  <div class="form-group">
-                    <input type="number" class="purchase-item-quantity" placeholder="Quantity" step="1" min="1" required />
-                  </div>
-                  <div class="form-group">
-                    <input type="number" class="purchase-item-cost" placeholder="Unit Cost" step="0.01" min="0" required />
-                  </div>
-                  <button type="button" class="btn-icon" onclick="removePurchaseItem(this)" disabled>
-                    <i class="fas fa-trash"></i>
-                  </button>
-                </div>
-              </div>
-              <button type="button" onclick="addPurchaseItem()" class="btn-secondary">
-                <i class="fas fa-plus"></i> Add Item
-              </button>
-            </div>
-
-            <div id="record-purchase-result" class="operation-result" style="display: none;"></div>
-
-            <button onclick="recordPurchase()" class="btn-primary">
-              <i class="fas fa-check"></i> Record Purchase
-            </button>
-          </div>
-        </div>
-      </div>
-    </main>
-  </div>
-
-  <!-- Product Source Selection Modal -->
-  <div id="product-source-modal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>Choose Product Setup Method</h2>
-        <button class="modal-close" onclick="closeModal()">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-
-      <div class="modal-body">
-        <p class="modal-description">How would you like to set up products for syncing?</p>
-        
-        <div class="source-options">
-          <div class="source-option-card" onclick="selectProductSource('pull')">
-            <div class="source-icon pull-icon">
-              <i class="fas fa-download"></i>
-            </div>
-            <h3>Use products from my online store</h3>
-            <p>Import existing products from your store into Prokip. Best if you already have products listed online.</p>
-            <ul class="feature-list">
-              <li><i class="fas fa-check"></i> Imports all store products</li>
-              <li><i class="fas fa-check"></i> Matches by SKU</li>
-              <li><i class="fas fa-check"></i> Creates missing products in Prokip</li>
-            </ul>
-            <button class="btn-primary">
-              <i class="fas fa-arrow-down"></i> Pull from Store
-            </button>
-          </div>
-
-          <div class="source-option-card" onclick="selectProductSource('push')">
-            <div class="source-icon push-icon">
-              <i class="fas fa-upload"></i>
-            </div>
-            <h3>Use products from Prokip</h3>
-            <p>Publish your Prokip inventory to your online store. Best if you're already managing inventory in Prokip.</p>
-            <ul class="feature-list">
-              <li><i class="fas fa-check"></i> Publishes Prokip products</li>
-              <li><i class="fas fa-check"></i> Syncs prices & inventory</li>
-              <li><i class="fas fa-check"></i> Creates products in store</li>
-            </ul>
-            <button class="btn-primary">
-              <i class="fas fa-arrow-up"></i> Push to Store
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Product Matching Modal -->
-  <div id="product-matching-modal" class="modal">
-    <div class="modal-content large-modal">
-      <div class="modal-header">
-        <h2>Review Product Matches</h2>
-        <button class="modal-close" onclick="closeModal()">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-
-      <div class="modal-body">
-        <div id="matching-summary" class="matching-summary"></div>
-        
-        <div class="matching-tabs">
-          <button class="tab-btn active" onclick="showMatchingTab('matched')">
-            Matched Products <span id="matched-count" class="badge">0</span>
-          </button>
-          <button class="tab-btn" onclick="showMatchingTab('unmatched-prokip')">
-            Unmatched (Prokip) <span id="unmatched-prokip-count" class="badge">0</span>
-          </button>
-          <button class="tab-btn" onclick="showMatchingTab('unmatched-store')">
-            Unmatched (Store) <span id="unmatched-store-count" class="badge">0</span>
-          </button>
-        </div>
-
-        <div id="matching-content" class="matching-content"></div>
-
-        <div class="modal-actions">
-          <button onclick="confirmMatches()" class="btn-primary">
-            <i class="fas fa-check"></i> Confirm & Continue
-          </button>
-          <button onclick="closeModal()" class="btn-secondary">Cancel</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Product Readiness Modal -->
-  <div id="product-readiness-modal" class="modal">
-    <div class="modal-content large-modal">
-      <div class="modal-header">
-        <h2>Product Readiness Check</h2>
-        <button class="modal-close" onclick="closeModal()">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-
-      <div class="modal-body">
-        <div id="readiness-summary" class="readiness-summary"></div>
-        <div id="readiness-products" class="readiness-products"></div>
-
-        <div class="modal-actions">
-          <button onclick="publishProducts()" class="btn-primary" id="publish-btn">
-            <i class="fas fa-cloud-upload-alt"></i> Publish to Store
-          </button>
-          <button onclick="closeModal()" class="btn-secondary">Cancel</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Sync Errors Modal -->
-  <div id="sync-errors-modal" class="modal">
-    <div class="modal-content large-modal">
-      <div class="modal-header">
-        <h2>Sync Errors</h2>
-        <button class="modal-close" onclick="closeModal()">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-
-      <div class="modal-body">
-        <div id="errors-list" class="errors-list"></div>
-      </div>
-    </div>
-  </div>
+	            <div class="modal-actions">
+	              <button id="test-woo-btn" onclick="testWooCommerceConnection()" class="btn-secondary" type="button">
+	                <i class="fas fa-plug"></i> Test Connection
+	              </button>
+	              <button id="connect-woo-btn" onclick="connectWooCommerceStore()" class="btn-primary" type="button">
+	                <i class="fas fa-shopping-cart"></i> Connect Store
+	              </button>
+	            </div>
+	          </div>
+	        </div>
+	      </div>
+	    </main>
+	  </div>
 
   <script src="script.js"></script>
 </body>

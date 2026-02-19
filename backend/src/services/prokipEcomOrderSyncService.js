@@ -63,6 +63,23 @@ async function fetchAllProkipProducts(userId, storeId = null) {
   return products;
 }
 
+async function resolveProkipStoreIdForConnection(userId, connection) {
+  if (!connection || !userId) return null;
+  try {
+    const storesResponse = await prokipEcomClient.getStores(userId);
+    const stores = storesResponse?.stores || storesResponse?.data || storesResponse || [];
+    const normalizedTarget = (connection.storeUrl || '').replace(/\/+$/, '').toLowerCase();
+    const matched = stores.find((s) => {
+      const url = (s.store_url || s.storeUrl || '').replace(/\/+$/, '').toLowerCase();
+      return url === normalizedTarget;
+    });
+    return matched?.id || matched?.store_id || null;
+  } catch (err) {
+    console.error('resolveProkipStoreIdForConnection failed:', err.message);
+    return null;
+  }
+}
+
 function getPrimaryVariationId(product) {
   const firstVariation =
     product?.product_variations?.[0]?.variations?.[0] ||
@@ -96,7 +113,7 @@ function buildSkuMap(products) {
   return map;
 }
 
-async function getSkuMapForUser(userId, storeId = null) {
+async function getSkuMapForUser(userId, storeId = null, connection = null) {
   const useLocalProkip = process.env.PROKIP_LOCAL_AUTH === 'true';
 
   if (useLocalProkip) {
@@ -123,7 +140,12 @@ async function getSkuMapForUser(userId, storeId = null) {
   const now = Date.now();
   if (cached && cached.expiresAt > now) return cached.map;
 
-  const products = await fetchAllProkipProducts(userId, storeId);
+  let finalStoreId = storeId;
+  if (!finalStoreId && connection) {
+    finalStoreId = await resolveProkipStoreIdForConnection(userId, connection);
+  }
+
+  const products = await fetchAllProkipProducts(userId, finalStoreId);
   const map = buildSkuMap(products);
 
   skuMapCache.set(cacheKey, {
@@ -250,7 +272,7 @@ async function syncWooOrderToProkip(wooOrder, connection, userId) {
     return { success: true, action: 'skipped', reason: 'status_not_eligible' };
   }
 
-  const skuMap = await getSkuMapForUser(userId, connection?.id || null);
+  const skuMap = await getSkuMapForUser(userId, connection?.id || null, connection);
   const { payload, items, missing, invoiceNo, totalQuantity } = mapWooOrderToProkipOrder(wooOrder, skuMap, connection);
 
   if (!items || items.length === 0) {

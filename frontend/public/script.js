@@ -1,4 +1,4 @@
-let token = '';
+﻿let token = '';
 let currentUser = null;
 let currentBusinessLocation = null;
 let businessLocations = [];
@@ -7,52 +7,67 @@ let prokipRefreshToken = null;
 let prokipExpiresIn = null;
 let selectedStore = null;
 let selectedConnectionId = null;
+let connectedStores = [];
 let productMatchesData = null;
 let productReadinessData = null;
 
 // API Configuration
-const API_BASE_URL = 'http://localhost:3000';
+const API_BASE_URL = (
+  window.API_BASE_URL ||
+  (document.querySelector('meta[name="api-base-url"]')?.content || '').trim() ||
+  window.location.origin
+).replace(/\/$/, '');
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
-  // Check if returning from OAuth callback
   const urlParams = new URLSearchParams(window.location.search);
   const hasOAuthParams = urlParams.has('shopify_success') || urlParams.has('shopify_error') || urlParams.has('code') || urlParams.has('shop');
-  
-  // If returning from OAuth, check for existing session
-  if (hasOAuthParams) {
-    const savedProkipToken = localStorage.getItem('prokipToken') || localStorage.getItem('token');
+
+  const savedAuthToken = localStorage.getItem('token');
+  const savedProkipToken = localStorage.getItem('prokipToken');
+  const savedLocation = localStorage.getItem('businessLocation');
+  const savedLocations = localStorage.getItem('businessLocations');
+  const savedUser = localStorage.getItem('currentUser');
+
+  if (savedAuthToken) {
+    token = savedAuthToken; // Local JWT for API calls
+    currentUser = JSON.parse(savedUser || '{}');
+
     if (savedProkipToken) {
       prokipToken = savedProkipToken;
-      token = prokipToken; // Set token for API calls
       prokipRefreshToken = localStorage.getItem('prokipRefreshToken');
-      currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      currentBusinessLocation = JSON.parse(localStorage.getItem('businessLocation') || 'null');
+    }
+    if (savedLocations) {
+      try {
+        businessLocations = JSON.parse(savedLocations);
+      } catch (error) {
+        businessLocations = [];
+      }
+    }
+
+    if (hasOAuthParams) {
       handleOAuthCallback();
-      if (currentBusinessLocation) {
-        showDashboard();
+    }
+
+    if (savedLocation && savedProkipToken) {
+      currentBusinessLocation = JSON.parse(savedLocation);
+      showDashboard();
+      return;
+    }
+
+    if (savedProkipToken) {
+      if (businessLocations && businessLocations.length > 0) {
+        showBusinessLocationSelection();
       } else {
         loadBusinessLocations();
       }
       return;
     }
-  }
-  
-  // Check for existing Prokip session
-  const savedProkipToken = localStorage.getItem('prokipToken') || localStorage.getItem('token');
-  const savedLocation = localStorage.getItem('businessLocation');
-  
-  if (savedProkipToken && savedLocation) {
-    prokipToken = savedProkipToken;
-    token = prokipToken; // Set token for API calls
-    prokipRefreshToken = localStorage.getItem('prokipRefreshToken');
-    currentBusinessLocation = JSON.parse(savedLocation);
-    currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-    showDashboard();
+
+    showProkipConnect();
     return;
   }
-  
-  // Show login screen
+
   showLogin();
 });
 
@@ -67,9 +82,9 @@ function handleOAuthCallback() {
     
     let message = `Successfully connected to Shopify store: ${store}`;
     if (webhooks === 'success') {
-      message += '\n✓ Webhooks registered successfully';
+      message += '\nâœ“ Webhooks registered successfully';
     } else if (webhooks === 'failed') {
-      message += '\n⚠️ Webhook registration failed (this is optional)';
+      message += '\nâš ï¸ Webhook registration failed (this is optional)';
     }
     
     showNotification('success', message);
@@ -190,7 +205,12 @@ async function apiCall(endpoint, methodOrOptions = 'GET', data = null) {
     }
 
     if (!response.ok) {
-      throw new Error(responseData.error || `HTTP ${response.status}`);
+      const errMessage = responseData.message || responseData.error || `HTTP ${response.status}`;
+      let details = '';
+      if (responseData.details) {
+        details = ` - ${typeof responseData.details === 'string' ? responseData.details : JSON.stringify(responseData.details)}`;
+      }
+      throw new Error(`${errMessage}${details}`);
     }
 
     return responseData;
@@ -220,123 +240,185 @@ async function prokipApiCall(endpoint, options = {}) {
   return response;
 }
 
-// Authentication functions - Prokip Login
-async function loginToProkip() {
-  console.log('🔐 Prokip login attempt started...');
-  
-  const username = document.getElementById('prokip-username').value.trim();
-  const password = document.getElementById('prokip-password').value;
+// Authentication functions - Local Login
+async function loginLocal() {
+  const usernameField = document.getElementById('username');
+  const passwordField = document.getElementById('password');
   const loginBtn = document.getElementById('login-btn');
   const loginBtnText = document.getElementById('login-btn-text');
   const loginSpinner = document.getElementById('login-spinner');
-  
-  console.log('Username:', username);
-  console.log('Password provided:', password ? '✅ Yes' : '❌ No');
+
+  const username = usernameField?.value?.trim() || '';
+  const password = passwordField?.value || '';
 
   if (!username || !password) {
-    console.log('❌ Missing username or password');
-    document.getElementById('login-error').textContent = 'Please enter your Prokip username and password';
+    document.getElementById('login-error').textContent = 'Please enter your username and password';
     return;
   }
 
-  // Show loading state
-  loginBtn.disabled = true;
-  loginBtnText.textContent = 'Signing in...';
-  loginSpinner.style.display = 'inline-block';
+  if (loginBtn) loginBtn.disabled = true;
+  if (loginBtnText) loginBtnText.textContent = 'Signing in...';
+  if (loginSpinner) loginSpinner.style.display = 'inline-block';
   document.getElementById('login-error').textContent = '';
 
   try {
-    console.log('🌐 Sending request to Prokip login...');
-    
-    const res = await fetch(`${API_BASE_URL}/auth/prokip-login`, {
+    const res = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username, password: password })
+      body: JSON.stringify({ username, password })
     });
 
-    console.log('📡 Response status:', res.status);
     const data = await res.json();
-    console.log('📦 Response data:', data);
 
-    if (res.ok && (data.access_token || data.token)) {
-      console.log('✅ Prokip login successful!');
-      
-      // Store Prokip tokens (handle both old OAuth and new response formats)
-      prokipToken = data.access_token || data.token;
-      token = prokipToken; // Set the main token variable for apiCall function
-      prokipRefreshToken = data.refresh_token;
-      prokipExpiresIn = data.expires_in;
-      currentUser = data.user || { username };
-      
-      localStorage.setItem('prokipToken', prokipToken);
-      localStorage.setItem('token', token); // Also store as 'token' for consistency
-      localStorage.setItem('prokipRefreshToken', prokipRefreshToken || '');
+    if (res.ok && data.token) {
+      token = data.token;
+      currentUser = { username };
+      localStorage.setItem('token', token);
       localStorage.setItem('currentUser', JSON.stringify(currentUser));
-      
-      // Store locations received from API
-      if (data.locations && data.locations.length > 0) {
-        businessLocations = data.locations;
-        console.log('📍 Real business locations loaded:', businessLocations.length);
-        businessLocations.forEach((location, index) => {
-          console.log(`  ${index + 1}. ${location.name || location.id} (ID: ${location.id})`);
-        });
-        showBusinessLocationSelection();
-      } else {
-        // No locations returned, show error
-        console.log('⚠️ No business locations found');
-        document.getElementById('login-error').textContent = 'No business locations found for this account. Please contact support.';
-      }
+
+      // Clear any old Prokip session
+      prokipToken = null;
+      prokipRefreshToken = null;
+      prokipExpiresIn = null;
+      currentBusinessLocation = null;
+      businessLocations = [];
+      localStorage.removeItem('prokipToken');
+      localStorage.removeItem('prokipRefreshToken');
+      localStorage.removeItem('businessLocation');
+
+      showProkipConnect();
     } else {
-      console.log('❌ Login failed:', data.error);
       document.getElementById('login-error').textContent = data.error || 'Login failed. Please check your credentials.';
     }
   } catch (error) {
-    console.error('❌ Network error:', error);
     document.getElementById('login-error').textContent = 'Could not connect to server. Please check your connection.';
   } finally {
-    // Reset button state
-    loginBtn.disabled = false;
-    loginBtnText.textContent = 'Sign In to Prokip';
-    loginSpinner.style.display = 'none';
+    if (loginBtn) loginBtn.disabled = false;
+    if (loginBtnText) loginBtnText.textContent = 'Sign In';
+    if (loginSpinner) loginSpinner.style.display = 'none';
+  }
+}
+
+// Connect Prokip account after local login
+async function connectProkip() {
+  const username = document.getElementById('prokip-username').value.trim();
+  const password = document.getElementById('prokip-password').value;
+  const loginBtn = document.getElementById('prokip-login-btn');
+  const loginBtnText = document.getElementById('prokip-login-btn-text');
+  const loginSpinner = document.getElementById('prokip-login-spinner');
+
+  if (!username || !password) {
+    document.getElementById('prokip-login-error').textContent = 'Please enter your Prokip username and password';
+    return;
+  }
+
+  if (loginBtn) loginBtn.disabled = true;
+  if (loginBtnText) loginBtnText.textContent = 'Connecting...';
+  if (loginSpinner) loginSpinner.style.display = 'inline-block';
+  document.getElementById('prokip-login-error').textContent = '';
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/auth/prokip-login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` })
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    const data = await res.json();
+
+    if (res.ok && (data.access_token || data.token)) {
+      if (data.token) {
+        token = data.token;
+        localStorage.setItem('token', token);
+      }
+
+      prokipToken = data.access_token || data.token;
+      prokipRefreshToken = data.refresh_token;
+      prokipExpiresIn = data.expires_in;
+      currentUser = data.user || currentUser || { username };
+
+      localStorage.setItem('prokipToken', prokipToken);
+      localStorage.setItem('prokipRefreshToken', prokipRefreshToken || '');
+      localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+      if (data.locations && data.locations.length > 0) {
+        businessLocations = data.locations;
+        localStorage.setItem('businessLocations', JSON.stringify(businessLocations));
+        showBusinessLocationSelection();
+      } else {
+        document.getElementById('prokip-login-error').textContent = 'No business locations found for this account.';
+      }
+    } else {
+      document.getElementById('prokip-login-error').textContent = data.error || 'Prokip login failed. Please check your credentials.';
+    }
+  } catch (error) {
+    document.getElementById('prokip-login-error').textContent = 'Could not connect to server. Please check your connection.';
+  } finally {
+    if (loginBtn) loginBtn.disabled = false;
+    if (loginBtnText) loginBtnText.textContent = 'Connect Prokip';
+    if (loginSpinner) loginSpinner.style.display = 'none';
   }
 }
 
 // Legacy login function (for backward compatibility)
 async function login() {
-  return loginToProkip();
+  return loginLocal();
 }
 
 // Load business locations from Prokip API
 async function loadBusinessLocations() {
   if (!prokipToken) {
-    showLogin();
+    if (token) {
+      showProkipConnect();
+    } else {
+      showLogin();
+    }
+    return;
+  }
+
+  if (businessLocations && businessLocations.length > 0) {
+    showBusinessLocationSelection();
     return;
   }
 
   try {
     const res = await fetch(`${API_BASE_URL}/auth/prokip-locations`, {
-      headers: { 'Authorization': `Bearer ${prokipToken}` }
+      headers: { 'Authorization': `Bearer ${token || prokipToken}` }
     });
     
     const data = await res.json();
     
     if (data.success && data.locations) {
       businessLocations = data.locations;
+      localStorage.setItem('businessLocations', JSON.stringify(businessLocations));
       showBusinessLocationSelection();
     } else {
       showNotification('error', 'Could not load business locations');
-      showLogin();
+      if (token) {
+        showProkipConnect();
+      } else {
+        showLogin();
+      }
     }
   } catch (error) {
     console.error('Failed to load locations:', error);
     showNotification('error', 'Failed to load business locations');
-    showLogin();
+    if (token) {
+      showProkipConnect();
+    } else {
+      showLogin();
+    }
   }
 }
 
 // Show business location selection screen
 function showBusinessLocationSelection() {
   document.getElementById('login-screen').style.display = 'none';
+  const prokipScreen = document.getElementById('prokip-connect-screen');
+  if (prokipScreen) prokipScreen.style.display = 'none';
   document.getElementById('location-selection-screen').style.display = 'flex';
   document.getElementById('dashboard').style.display = 'none';
 
@@ -397,7 +479,10 @@ async function selectBusinessLocation(location) {
   try {
     const response = await fetch(`${API_BASE_URL}/auth/prokip-location`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` })
+      },
       body: JSON.stringify({
         locationId: location.id,
         access_token: prokipToken,
@@ -413,26 +498,27 @@ async function selectBusinessLocation(location) {
       // Use the JWT token returned by the backend for API calls
       token = data.token;
       localStorage.setItem('token', token);
-      console.log('✅ JWT token received and stored');
-    } else {
-      // Fallback to prokipToken if no JWT returned
+      console.log('âœ… JWT token received and stored');
+    } else if (!token && prokipToken) {
+      // Final fallback only if we have no local token
       token = prokipToken;
       localStorage.setItem('token', token);
-      console.log('⚠️ Using prokipToken as fallback');
+      console.log('âš ï¸ Using prokipToken as fallback');
     }
   } catch (error) {
     console.error('Failed to save location to backend:', error);
-    // Fallback to prokipToken
-    token = prokipToken;
-    localStorage.setItem('token', token);
+    if (!token && prokipToken) {
+      token = prokipToken;
+      localStorage.setItem('token', token);
+    }
   }
   
   // Update profile display
-  document.getElementById('profile-username').textContent = currentUser?.email || 'User';
+  document.getElementById('profile-username').textContent = currentUser?.username || currentUser?.email || 'User';
   document.getElementById('profile-location').textContent = location.name;
 
   // Refresh Prokip data for the new location
-  console.log('🔄 Refreshing Prokip data for new location:', location.name);
+  console.log('ðŸ”„ Refreshing Prokip data for new location:', location.name);
   try {
     // Load fresh data for the new location
     await Promise.all([
@@ -440,9 +526,9 @@ async function selectBusinessLocation(location) {
       loadProkipSales(),
       loadProkipPurchases()
     ]);
-    console.log('✅ Prokip data refreshed for new location');
+    console.log('âœ… Prokip data refreshed for new location');
   } catch (error) {
-    console.error('❌ Failed to refresh Prokip data:', error);
+    console.error('âŒ Failed to refresh Prokip data:', error);
   }
 
   showDashboard();
@@ -455,10 +541,28 @@ function changeBusinessLocation() {
   showBusinessLocationSelection();
 }
 
+function showProkipConnect() {
+  const prokipScreen = document.getElementById('prokip-connect-screen');
+  if (prokipScreen) prokipScreen.style.display = 'flex';
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('location-selection-screen').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'none';
+
+  const usernameField = document.getElementById('prokip-username');
+  const passwordField = document.getElementById('prokip-password');
+  if (usernameField) usernameField.value = '';
+  if (passwordField) passwordField.value = '';
+  const error = document.getElementById('prokip-login-error');
+  if (error) error.textContent = '';
+}
+
 // Logout from Prokip
 async function logoutFromProkip() {
   try {
-    await fetch(`${API_BASE_URL}/auth/prokip-logout`, { method: 'POST' });
+    await fetch(`${API_BASE_URL}/auth/prokip-logout`, { 
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
   } catch (error) {
     console.error('Logout error:', error);
   }
@@ -478,6 +582,7 @@ async function logoutFromProkip() {
   localStorage.removeItem('prokipToken');
   localStorage.removeItem('prokipRefreshToken');
   localStorage.removeItem('businessLocation');
+  localStorage.removeItem('businessLocations');
   localStorage.removeItem('currentUser');
   
   showLogin();
@@ -489,20 +594,14 @@ function logout() {
 }
 
 function showLogin() {
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('location-selection-screen').style.display = 'none';
-  document.getElementById('dashboard').style.display = 'none';
-  
-  // Clear form
-  const usernameField = document.getElementById('prokip-username');
-  const passwordField = document.getElementById('prokip-password');
-  if (usernameField) usernameField.value = '';
-  if (passwordField) passwordField.value = '';
-  document.getElementById('login-error').textContent = '';
+  // Keep the function for backward compatibility, but show only the Prokip login.
+  showProkipConnect();
 }
 
 function showDashboard() {
   document.getElementById('login-screen').style.display = 'none';
+  const prokipScreen = document.getElementById('prokip-connect-screen');
+  if (prokipScreen) prokipScreen.style.display = 'none';
   document.getElementById('location-selection-screen').style.display = 'none';
   document.getElementById('dashboard').style.display = 'flex';
   
@@ -541,9 +640,7 @@ function navigateTo(pageName) {
   } else if (pageName === 'settings') {
     loadConnectedStores();
   } else if (pageName === 'prokip-operations') {
-    loadProkipProducts();
-    loadProkipSales();
-    loadProkipPurchases();
+    showProkipTab('products');
   } else if (pageName.startsWith('store-')) {
     if (!selectedStore) {
       showNotification('error', 'Please select a store first');
@@ -574,6 +671,12 @@ function connectShopify() {
 function connectWooCommerce() {
   document.getElementById('woocommerce-modal').classList.add('show');
   document.getElementById('woocommerce-modal').style.display = 'flex';
+
+  const statusDiv = document.getElementById('woo-connection-status');
+  if (statusDiv) {
+    statusDiv.style.display = 'none';
+    statusDiv.innerHTML = '';
+  }
 }
 
 // Connection functions
@@ -616,10 +719,10 @@ async function initiateShopifyConnection() {
 // Test WooCommerce connection
 async function testWooCommerceConnection() {
   const storeUrl = document.getElementById('woo-store-url').value.trim();
-  const consumerKey = document.getElementById('woo-consumer-key').value.trim();
-  const consumerSecret = document.getElementById('woo-consumer-secret').value.trim();
+  const wooUsername = document.getElementById('woo-admin-user').value.trim();
+  const wooAppPassword = document.getElementById('woo-app-password').value.trim();
 
-  if (!storeUrl || !consumerKey || !consumerSecret) {
+  if (!storeUrl || !wooUsername || !wooAppPassword) {
     showWooConnectionStatus('error', 'Please fill in all required fields');
     return;
   }
@@ -634,13 +737,13 @@ async function testWooCommerceConnection() {
   try {
     const response = await apiCall('/woo-connections/test', 'POST', {
       storeUrl,
-      consumerKey,
-      consumerSecret
+      wooUsername,
+      wooAppPassword
     });
 
     if (response.success) {
       showWooConnectionStatus('success', 
-        `✅ Connection successful! Store: ${response.storeInfo.url}, Products accessible: ${response.testResults.productsFetched}`
+        `âœ… Connection successful! Store: ${response.storeInfo.url}, Products accessible: ${response.testResults.productsFetched}`
       );
     } else {
       showWooConnectionStatus('error', response.message, response.details, response.suggestions);
@@ -657,11 +760,11 @@ async function testWooCommerceConnection() {
 // Connect WooCommerce store
 async function connectWooCommerceStore() {
   const storeUrl = document.getElementById('woo-store-url').value.trim();
-  const consumerKey = document.getElementById('woo-consumer-key').value.trim();
-  const consumerSecret = document.getElementById('woo-consumer-secret').value.trim();
+  const wooUsername = document.getElementById('woo-admin-user').value.trim();
+  const wooAppPassword = document.getElementById('woo-app-password').value.trim();
   const storeName = document.getElementById('woo-store-name').value.trim();
 
-  if (!storeUrl || !consumerKey || !consumerSecret) {
+  if (!storeUrl || !wooUsername || !wooAppPassword) {
     showWooConnectionStatus('error', 'Please fill in all required fields');
     return;
   }
@@ -673,28 +776,29 @@ async function connectWooCommerceStore() {
   connectBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Connecting...';
   showWooConnectionStatus('info', 'Connecting your store...');
 
-  try {
-    const response = await apiCall('/woo-connections/connect', 'POST', {
-      storeUrl,
-      consumerKey,
-      consumerSecret,
-      storeName
-    });
+		try {
+		  const response = await apiCall('/woo-connections/connect', 'POST', {
+		    storeUrl,
+		    wooUsername,
+		    wooAppPassword,
+		    storeName
+		  });
 
-    if (response.success) {
-      showWooConnectionStatus('success', 
-        `✅ Store connected successfully! Store: ${response.connection.storeName}`
-      );
-      
-      setTimeout(() => {
-        closeModal();
-        loadConnectedStores();
-        loadDashboardData();
-      }, 2000);
-    } else {
-      showWooConnectionStatus('error', response.message, response.details, response.suggestions);
-    }
-  } catch (error) {
+		  if (response.success) {
+		    showWooConnectionStatus(
+		      'success',
+		      response.message || `Store connected successfully: ${response.connection.storeName}`
+		    );
+		    
+		    setTimeout(() => {
+		      closeModal();
+		      loadConnectedStores();
+		      loadDashboardData();
+		    }, 1500);
+		  } else {
+		    showWooConnectionStatus('error', response.message, response.details, response.suggestions);
+		  }
+	} catch (error) {
     console.error('WooCommerce connection error:', error);
     showWooConnectionStatus('error', 'Connection failed', error.message);
   } finally {
@@ -732,6 +836,7 @@ async function loadDashboardData() {
     updateDashboardStats(data);
     updateStoresOverview(data.stores || data);
     updateActivityFeed(data);
+    loadEcomSyncStatus();
   } catch (error) {
     console.error('Failed to load dashboard data:', error);
   }
@@ -756,6 +861,102 @@ function updateDashboardStats(data) {
   document.getElementById('prokip-purchases').textContent = prokip.purchases;
 }
 
+function getPrimaryStore() {
+  if (selectedStore && selectedStore.id) return selectedStore;
+  if (connectedStores && connectedStores.length > 0) return connectedStores[0];
+  return null;
+}
+
+function populateProkipStoreSelect() {
+  const select = document.getElementById('prokip-store-select');
+  if (!select) return;
+
+  select.innerHTML = '';
+
+  if (!connectedStores || connectedStores.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No stores connected';
+    select.appendChild(opt);
+    return;
+  }
+
+  connectedStores.forEach(store => {
+    const opt = document.createElement('option');
+    opt.value = store.id;
+    const name = store.storeName || store.storeUrl || `Store ${store.id}`;
+    const platform = store.platform ? store.platform.charAt(0).toUpperCase() + store.platform.slice(1) : 'Store';
+    opt.textContent = `${platform} - ${name}`;
+    select.appendChild(opt);
+  });
+
+  const activeId = selectedStore?.id || connectedStores[0].id;
+  select.value = String(activeId);
+  if (!selectedStore) {
+    const active = connectedStores.find(s => s.id === activeId);
+    if (active) {
+      selectedStore = { id: active.id, platform: active.platform, storeUrl: active.storeUrl, storeName: active.storeName };
+    }
+  }
+}
+
+function handleProkipStoreChange() {
+  const select = document.getElementById('prokip-store-select');
+  if (!select) return;
+  const storeId = parseInt(select.value, 10);
+  const store = connectedStores.find(s => s.id === storeId);
+  if (!store) {
+    selectedStore = null;
+    loadEcomSyncStatus();
+    return;
+  }
+  selectedStore = { id: store.id, platform: store.platform, storeUrl: store.storeUrl, storeName: store.storeName };
+  loadEcomSyncStatus();
+}
+
+async function loadEcomSyncStatus() {
+  const panel = document.getElementById('ecom-sync-status-panel');
+  if (!panel) return;
+
+  const store = getPrimaryStore();
+  const storeMeta = connectedStores?.find(s => s.id === store?.id) || store;
+  const storeNameEl = document.getElementById('ecom-sync-store');
+  const lastSyncEl = document.getElementById('ecom-sync-last');
+  const productsEl = document.getElementById('ecom-sync-products');
+  const ordersEl = document.getElementById('ecom-sync-orders');
+  const messageEl = document.getElementById('ecom-sync-message');
+
+  if (!store) {
+    if (storeNameEl) storeNameEl.textContent = 'No store selected';
+    if (lastSyncEl) lastSyncEl.textContent = '-';
+    if (productsEl) productsEl.textContent = '0';
+    if (ordersEl) ordersEl.textContent = '0';
+    if (messageEl) messageEl.textContent = 'Connect a store to view sync status.';
+    return;
+  }
+
+  if (storeNameEl) storeNameEl.textContent = store.storeName || store.storeUrl || `Store ${store.id}`;
+
+  try {
+    const res = await apiCall(`/api/ecom/sync-status/${store.id}`);
+    const lastSync = res.last_sync || res.lastSync || null;
+
+    if (lastSyncEl) lastSyncEl.textContent = lastSync ? new Date(lastSync).toLocaleString() : 'Not synced yet';
+    if (productsEl) productsEl.textContent = res.total_products || res.products_synced || 0;
+    if (ordersEl) ordersEl.textContent = res.total_orders || res.orders_synced || 0;
+    if (messageEl) messageEl.textContent = res.message || 'Sync status loaded';
+  } catch (error) {
+    if (lastSyncEl) lastSyncEl.textContent = storeMeta?.lastSync ? new Date(storeMeta.lastSync).toLocaleString() : 'Not synced yet';
+    if (productsEl) productsEl.textContent = storeMeta?.productCount || 0;
+    if (ordersEl) ordersEl.textContent = storeMeta?.orderCount || 0;
+    if (messageEl) {
+      messageEl.textContent = (error.message || '').includes('Store not connected')
+        ? 'Store not connected in Prokip yet. You can still sync from WooCommerce.'
+        : 'Failed to load sync status.';
+    }
+  }
+}
+
 function updateStoresOverview(stores) {
   const grid = document.getElementById('stores-overview-grid');
   
@@ -778,10 +979,9 @@ function updateStoresOverview(stores) {
     const iconClass = platform === 'shopify' ? 'fab fa-shopify' : 'fas fa-shopping-cart';
     const iconBg = platform === 'shopify' ? '#96BF48' : '#96588A';
     const displayName = store.storeName || store.storeUrl;
-
     return `
       <div class="store-overview-card">
-        <div class="store-overview-header" onclick="viewStore(${store.id}, '${store.platform}', '${store.storeUrl}', '${displayName}')">
+        <div class="store-overview-header" onclick="onViewStore(${store.id})">
           <div class="store-overview-icon" style="background: ${iconBg};">
             <i class="${iconClass}"></i>
           </div>
@@ -801,10 +1001,10 @@ function updateStoresOverview(stores) {
           </div>
         </div>
         <div class="store-overview-actions">
-          <button onclick="showProductSetupFlow(${store.id}, '${store.platform}', '${store.storeUrl}')" class="btn-small btn-primary">
+          <button onclick="onShowProductSetupFlow(${store.id})" class="btn-small btn-primary">
             <i class="fas fa-sync-alt"></i> Setup Products
           </button>
-          <button onclick="viewStore(${store.id}, '${store.platform}', '${store.storeUrl}', '${displayName}')" class="btn-small btn-secondary">
+          <button onclick="onViewStore(${store.id})" class="btn-small btn-secondary">
             <i class="fas fa-eye"></i> View Details
           </button>
         </div>
@@ -813,10 +1013,31 @@ function updateStoresOverview(stores) {
   }).join('');
 }
 
+// Safer click helpers to avoid inline quote breakage
+function onViewStore(storeId) {
+  const store = (connectedStores || []).find(s => s.id === storeId);
+  if (!store) return;
+  const displayName = store.storeName || store.storeUrl;
+  viewStore(store.id, store.platform, store.storeUrl, displayName);
+}
+
+function onShowProductSetupFlow(storeId) {
+  const store = (connectedStores || []).find(s => s.id === storeId);
+  if (!store) return;
+  showProductSetupFlow(store.id, store.platform, store.storeUrl);
+}
+
 function viewStore(storeId, platform, storeUrl, storeName = null) {
   console.log('viewStore called with:', { storeId, platform, storeUrl, storeName });
   selectedStore = { id: storeId, platform, storeUrl, storeName };
   selectedConnectionId = storeId;
+
+  // If user expects to reach the store dashboard, open the store URL in a new tab (non-blocking).
+  if (storeUrl) {
+    const normalizedUrl = storeUrl.startsWith('http') ? storeUrl : `https://${storeUrl}`;
+    // Best-effort: don't block internal navigation; open in background tab.
+    window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
+  }
   
   // Show store menu section
   document.getElementById('store-menu-section').style.display = 'block';
@@ -824,12 +1045,15 @@ function viewStore(storeId, platform, storeUrl, storeName = null) {
   // Update store menu title to show "Connected Store - [name]"
   const displayName = storeName || storeUrl;
   document.getElementById('store-menu-title').textContent = `Connected Store - ${displayName}`;
+  populateProkipStoreSelect();
   
   // Navigate to store products page
   navigateTo('store-products');
   
   // Update the page subtitle
   document.getElementById('store-products-subtitle').textContent = `${platform} - ${storeUrl}`;
+
+  loadEcomSyncStatus();
 }
 
 // Product Setup Flow Functions
@@ -924,10 +1148,12 @@ function displayProductMatches() {
   modal.style.display = 'flex';
 }
 
-function showMatchingTab(tab) {
+function showMatchingTab(tab, evt = null) {
   // Update tab buttons
   document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-  event.target.classList.add('active');
+  if (evt && evt.target) {
+    evt.target.classList.add('active');
+  }
   
   const content = document.getElementById('matching-content');
   
@@ -953,7 +1179,7 @@ function showMatchingTab(tab) {
                   <td>${match.storeProduct.name}</td>
                   <td>
                     <span class="badge ${priceMatch ? 'badge-success' : 'badge-warning'}">
-                      ${priceMatch ? '✓ Match' : '⚠ Different'}
+                      ${priceMatch ? 'âœ“ Match' : 'âš  Different'}
                     </span>
                   </td>
                 </tr>
@@ -989,22 +1215,12 @@ async function confirmMatches() {
   showNotification('info', 'Starting product pull...');
   
   try {
-    const res = await apiCall('/setup/products', {
-      method: 'POST',
-      body: JSON.stringify({
-        method: 'pull',
-        connectionId: selectedConnectionId
-      })
+    const data = await apiCall('/setup/products', 'POST', {
+      method: 'pull',
+      connectionId: selectedConnectionId
     });
-    
-    if (res.ok) {
-      const data = await res.json();
-      showNotification('success', data.message || 'Products pulled successfully');
-      setTimeout(() => loadDashboardData(), 2000);
-    } else {
-      const error = await res.json();
-      showNotification('error', error.error || 'Failed to pull products');
-    }
+    showNotification('success', data.message || 'Products pulled successfully');
+    setTimeout(() => loadDashboardData(), 1500);
   } catch (error) {
     console.error('Pull error:', error);
     showNotification('error', 'Error pulling products');
@@ -1081,22 +1297,12 @@ async function publishProducts() {
   showNotification('info', 'Publishing products to store...');
   
   try {
-    const res = await apiCall('/setup/products', {
-      method: 'POST',
-      body: JSON.stringify({
-        method: 'push',
-        connectionId: selectedConnectionId
-      })
+    const data = await apiCall('/setup/products', 'POST', {
+      method: 'push',
+      connectionId: selectedConnectionId
     });
-    
-    if (res.ok) {
-      const data = await res.json();
-      showNotification('success', data.message || 'Products published successfully');
-      setTimeout(() => loadDashboardData(), 2000);
-    } else {
-      const error = await res.json();
-      showNotification('error', error.error || 'Failed to publish products');
-    }
+    showNotification('success', data.message || 'Products published successfully');
+    setTimeout(() => loadDashboardData(), 1500);
   } catch (error) {
     console.error('Publish error:', error);
     showNotification('error', 'Error publishing products');
@@ -1212,15 +1418,17 @@ function updateActivityFeed(data) {
 // Connected stores management
 async function loadConnectedStores() {
   try {
-    console.log('🔄 Loading connected stores...');
+    console.log('ðŸ”„ Loading connected stores...');
     const data = await apiCall('/sync/status');
     
-    console.log('📦 Sync status response:', data);
+    console.log('ðŸ“¦ Sync status response:', data);
     
     // Handle both response formats (direct array or wrapped in stores property)
     const stores = data.stores || data;
+    connectedStores = Array.isArray(stores) ? stores : [];
+    populateProkipStoreSelect();
     
-    console.log('🏪 Stores found:', stores.length);
+    console.log('ðŸª Stores found:', stores.length);
     if (Array.isArray(stores)) {
       stores.forEach(store => {
         console.log(`  - ${store.platform}: ${store.storeUrl}`);
@@ -1272,9 +1480,10 @@ async function loadConnectedStores() {
       storesList.appendChild(storeItem);
     });
     
-    console.log('✅ Connected stores loaded successfully');
+    console.log('âœ… Connected stores loaded successfully');
+    loadEcomSyncStatus();
   } catch (error) {
-    console.error('❌ Failed to load connected stores:', error);
+    console.error('âŒ Failed to load connected stores:', error);
     const storesList = document.getElementById('stores-list');
     storesList.innerHTML = '<p style="color: var(--red-500); text-align: center; padding: 20px;">Error loading stores. Please try again.</p>';
   }
@@ -1354,7 +1563,7 @@ async function loadStoreProducts() {
     
     console.log('Products response:', response);
     console.log('Extracted products:', products);
-    console.log('🔄 FRONTEND SORTING ACTIVE - Products sorted by stock level');
+    console.log('ðŸ”„ FRONTEND SORTING ACTIVE - Products sorted by stock level');
     
     displayProducts(products);
   } catch (error) {
@@ -1466,6 +1675,7 @@ function displayProducts(products) {
 
 async function loadStoreOrders() {
   const content = document.getElementById('orders-content');
+  if (!content) return;
   content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center;">Loading orders...</p>';
 
   try {
@@ -1487,6 +1697,7 @@ async function loadStoreOrders() {
 
 function displayOrders(orders) {
   const content = document.getElementById('orders-content');
+  if (!content) return;
   
   // Display location information
   const locationInfo = currentBusinessLocation ? 
@@ -1582,91 +1793,151 @@ function getOrderStatusClass(status) {
 
 async function loadStoreAnalytics() {
   const content = document.getElementById('analytics-content');
-  content.innerHTML = '<div class="loading-spinner"></div><p style="text-align: center; color: var(--gray-500);">Loading analytics...</p>';
-  
+  if (!content) return;
+  content.classList.add('loading');
+
+  const salesEl = document.getElementById('store-dashboard-sales');
+  const ordersEl = document.getElementById('store-dashboard-orders');
+  const syncEl = document.getElementById('store-dashboard-sync');
+  const platformEl = document.getElementById('store-dashboard-platform');
+  const ordersList = document.getElementById('store-recent-orders');
+  const salesSummary = document.getElementById('store-sales-summary');
+  const ordersMeta = document.getElementById('store-dashboard-orders-meta');
+  const salesMeta = document.getElementById('store-dashboard-sales-meta');
+
   if (!selectedStore) {
-    content.innerHTML = '<div class="empty-state-card"><h3>No Store Selected</h3><p>Please select a store first</p></div>';
+    if (salesEl) salesEl.textContent = '0';
+    if (ordersEl) ordersEl.textContent = '0';
+    if (syncEl) syncEl.textContent = 'Not synced';
+    if (platformEl) platformEl.textContent = 'Store';
+    if (ordersMeta) ordersMeta.textContent = '-';
+    if (salesMeta) salesMeta.textContent = '-';
+    if (ordersList) ordersList.innerHTML = '<div class="empty-state"><i class="fas fa-receipt"></i><p>Select a store to view orders</p></div>';
+    if (salesSummary) salesSummary.innerHTML = '<div class="empty-state"><i class="fas fa-chart-line"></i><p>Select a store to view sales</p></div>';
+    content.classList.remove('loading');
     return;
   }
-  
+
   try {
-    // Use dynamic endpoint that finds user's WooCommerce connection automatically
-    const analytics = await apiCall('/stores/my-store/analytics');
-    const storeName = analytics.storeUrl ? new URL(analytics.storeUrl).hostname : 'WooCommerce Store';
+    const [analytics, ordersRes] = await Promise.all([
+      apiCall(`/stores/my-store/analytics?connectionId=${selectedStore.id}`),
+      apiCall(`/stores/my-store/orders?connectionId=${selectedStore.id}`)
+    ]);
+
+    const orders = ordersRes.orders || ordersRes || [];
     const currency = currentBusinessLocation?.currency || 'KES';
-    
-    content.innerHTML = `
-      <div class="analytics-grid">
-        <div class="analytics-card">
-          <div class="analytics-icon" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-            <i class="fas fa-box"></i>
+    const totalRevenue = orders.reduce((sum, order) => sum + parseFloat(order.total || order.total_price || 0), 0);
+    const averageOrder = orders.length ? totalRevenue / orders.length : 0;
+    const statusCounts = orders.reduce((acc, order) => {
+      const status = (order.status || order.financial_status || 'completed').toLowerCase();
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {});
+    const lastSync = analytics.lastSyncTime || analytics.lastSync || analytics.last_sync || null;
+    const storePlatform = selectedStore.platform
+      ? selectedStore.platform.charAt(0).toUpperCase() + selectedStore.platform.slice(1)
+      : 'Store';
+
+    if (ordersEl) ordersEl.textContent = orders.length.toString();
+    if (salesEl) salesEl.textContent = `${currency} ${totalRevenue.toLocaleString()}`;
+    if (syncEl) syncEl.textContent = lastSync ? new Date(lastSync).toLocaleString() : 'Not synced';
+    if (platformEl) platformEl.textContent = storePlatform;
+    if (ordersMeta) ordersMeta.textContent = `Total: ${orders.length}`;
+    if (salesMeta) salesMeta.textContent = `Revenue: ${currency} ${totalRevenue.toLocaleString()}`;
+
+    const recentOrders = orders
+      .slice()
+      .sort((a, b) => new Date(b.date || b.created_at || 0) - new Date(a.date || a.created_at || 0))
+      .slice(0, 5);
+
+    if (ordersList) {
+      if (!recentOrders.length) {
+        ordersList.innerHTML = '<div class="empty-state"><i class="fas fa-receipt"></i><p>No orders yet</p></div>';
+      } else {
+        ordersList.innerHTML = recentOrders.map(order => {
+          const orderId = order.orderId || order.id || 'N/A';
+          const total = order.total || order.total_price || 0;
+          const status = order.status || order.financial_status || 'completed';
+          const date = order.date || order.created_at
+            ? new Date(order.date || order.created_at).toLocaleDateString()
+            : '-';
+          return `
+            <div class="mini-row">
+              <div class="mini-main">
+                <strong>#${orderId}</strong>
+                <span class="mini-muted">${date}</span>
+              </div>
+              <div class="mini-meta">
+                <span class="status-badge ${getOrderStatusClass(status)}">${status}</span>
+                <span class="mini-amount">${currency} ${parseFloat(total).toLocaleString()}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    const completed = statusCounts.completed || statusCounts.paid || 0;
+    const processing = statusCounts.processing || 0;
+    const pending = statusCounts.pending || statusCounts['on-hold'] || 0;
+
+    if (salesSummary) {
+      salesSummary.innerHTML = `
+        <div class="mini-row">
+          <div class="mini-main">
+            <strong>Total revenue</strong>
+            <span class="mini-muted">${orders.length} orders</span>
           </div>
-          <div class="analytics-content">
-            <div class="analytics-number">${analytics.syncedProducts || 0}</div>
-            <div class="analytics-label">Synced Products</div>
-            <div class="analytics-trend"><i class="fas fa-arrow-up"></i> Active</div>
-          </div>
-        </div>
-        
-        <div class="analytics-card">
-          <div class="analytics-icon" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
-            <i class="fas fa-shopping-cart"></i>
-          </div>
-          <div class="analytics-content">
-            <div class="analytics-number">${analytics.ordersProcessed || 0}</div>
-            <div class="analytics-label">Orders Processed</div>
-            <div class="analytics-trend"><i class="fas fa-check-circle"></i> Synced</div>
-          </div>
-        </div>
-        
-        <div class="analytics-card">
-          <div class="analytics-icon" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
-            <i class="fas fa-sync"></i>
-          </div>
-          <div class="analytics-content">
-            <div class="analytics-number">${analytics.lastSyncTime || analytics.lastSync ? 'Active' : 'Pending'}</div>
-            <div class="analytics-label">Sync Status</div>
-            <div class="analytics-trend">${analytics.lastSyncTime || analytics.lastSync ? new Date(analytics.lastSyncTime || analytics.lastSync).toLocaleString() : 'Not synced yet'}</div>
-          </div>
-        </div>
-        
-        <div class="analytics-card">
-          <div class="analytics-icon" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
-            <i class="fas fa-database"></i>
-          </div>
-          <div class="analytics-content">
-            <div class="analytics-number">${selectedStore.platform}</div>
-            <div class="analytics-label">Platform</div>
-            <div class="analytics-trend"><i class="fas fa-plug"></i> Connected</div>
-          </div>
-        </div>
-      </div>
-      
-      <div class="analytics-detail-card">
-        <h3><i class="fas fa-store"></i> Store: ${storeName}</h3>
-        <div class="detail-grid">
-          <div class="detail-item">
-            <span class="detail-label">Platform:</span>
-            <span class="detail-value">${selectedStore.platform.charAt(0).toUpperCase() + selectedStore.platform.slice(1)}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Store URL:</span>
-            <span class="detail-value">${selectedStore.storeUrl}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Currency:</span>
-            <span class="detail-value">${currency}</span>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Business Location:</span>
-            <span class="detail-value">${currentBusinessLocation?.name || 'N/A'}</span>
+          <div class="mini-meta">
+            <span class="mini-amount">${currency} ${totalRevenue.toLocaleString()}</span>
           </div>
         </div>
-      </div>
-    `;
+        <div class="mini-row">
+          <div class="mini-main">
+            <strong>Average order</strong>
+            <span class="mini-muted">Per order value</span>
+          </div>
+          <div class="mini-meta">
+            <span class="mini-amount">${currency} ${averageOrder.toFixed(2)}</span>
+          </div>
+        </div>
+        <div class="mini-row">
+          <div class="mini-main">
+            <strong>Completed</strong>
+            <span class="mini-muted">Delivered or paid</span>
+          </div>
+          <div class="mini-meta">
+            <span class="status-badge status-success">${completed}</span>
+          </div>
+        </div>
+        <div class="mini-row">
+          <div class="mini-main">
+            <strong>Processing</strong>
+            <span class="mini-muted">In progress</span>
+          </div>
+          <div class="mini-meta">
+            <span class="status-badge status-info">${processing}</span>
+          </div>
+        </div>
+        <div class="mini-row">
+          <div class="mini-main">
+            <strong>Pending</strong>
+            <span class="mini-muted">Awaiting action</span>
+          </div>
+          <div class="mini-meta">
+            <span class="status-badge status-warning">${pending}</span>
+          </div>
+        </div>
+      `;
+    }
   } catch (error) {
     console.error('Failed to load analytics:', error);
-    content.innerHTML = `<div class="empty-state-card"><h3>Error loading analytics</h3><p>${error.message || 'Please check your connection and try again'}</p></div>`;
+    if (ordersMeta) ordersMeta.textContent = '-';
+    if (salesMeta) salesMeta.textContent = '-';
+    if (ordersList) ordersList.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Failed to load orders</p></div>';
+    if (salesSummary) salesSummary.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Failed to load sales</p></div>';
+  } finally {
+    content.classList.remove('loading');
   }
 }
 
@@ -1689,27 +1960,19 @@ async function syncStoreProducts() {
           <p style="margin-bottom: 20px; color: var(--gray-600);">Choose a sync action for <strong>${selectedStore.storeName || selectedStore.storeUrl}</strong>:</p>
           
           <div class="sync-options">
-            <button class="sync-option-btn" id="viewInventoryBtn" onclick="viewStoreInventory()">
-              <i class="fas fa-boxes" style="color: var(--info-color);" id="viewInventoryIcon"></i>
+            <button class="sync-option-btn" id="syncProkipOrdersBtn" onclick="syncOrdersFromProkip()">
+              <i class="fas fa-sync" style="color: var(--success-color);" id="syncOrdersIcon"></i>
               <div class="sync-option-text">
-                <strong id="viewInventoryText">View Store Inventory</strong>
-                <span id="viewInventoryDesc">See current inventory levels from ${selectedStore.platform}</span>
+                <strong id="syncOrdersText">Sync Orders from Prokip</strong>
+                <span id="syncOrdersDesc">Send Prokip sales to ${selectedStore.platform} and deduct stock</span>
               </div>
             </button>
-            
-            <button class="sync-option-btn" id="syncInventoryBtn" onclick="syncInventoryFromProkip()">
-              <i class="fas fa-download" style="color: var(--success-color);" id="syncInventoryIcon"></i>
+
+            <button class="sync-option-btn" id="pushToStoreBtn" onclick="pushProkipProductsToStore()">
+              <i class="fas fa-cloud-upload-alt" style="color: var(--primary-color);" id="pushToStoreIcon"></i>
               <div class="sync-option-text">
-                <strong id="syncInventoryText">Sync Inventory from Prokip</strong>
-                <span id="syncInventoryDesc">Push Prokip inventory quantities to ${selectedStore.platform}</span>
-              </div>
-            </button>
-            
-            <button class="sync-option-btn" id="pushProductsBtn" onclick="pushProductsToProkip()">
-              <i class="fas fa-upload" style="color: var(--warning-color);" id="pushProductsIcon"></i>
-              <div class="sync-option-text">
-                <strong id="pushProductsText">Push Products to Store</strong>
-                <span id="pushProductsDesc">Create Prokip products in ${selectedStore.platform}</span>
+                <strong id="pushToStoreText">Push Prokip Products to Store</strong>
+                <span id="pushToStoreDesc">Create/update products in ${selectedStore.platform} from Prokip</span>
               </div>
             </button>
           </div>
@@ -1874,7 +2137,7 @@ function displayStoreInventory(products) {
       
       ${lowStock > 0 ? `
         <div class="alert alert-warning" style="margin-bottom: 15px; padding: 10px 15px; background: #fff3cd; border-left: 4px solid var(--warning-color); border-radius: 4px;">
-          <i class="fas fa-exclamation-triangle"></i> <strong>${lowStock}</strong> product(s) have low stock (≤10 units)
+          <i class="fas fa-exclamation-triangle"></i> <strong>${lowStock}</strong> product(s) have low stock (â‰¤10 units)
         </div>
       ` : ''}
       
@@ -1956,33 +2219,17 @@ async function syncInventoryFromProkip() {
   }
   
   try {
-    showNotification('info', 'Syncing inventory from Prokip...');
-    const res = await apiCall('/sync/inventory', {
-      method: 'POST',
-      body: JSON.stringify({
-        connectionId: selectedStore.id
-      })
-    });
-    
-    if (res.success) {
-      showNotification('success', res.message || 'Inventory sync completed successfully');
-      setTimeout(() => viewStoreInventory(), 2000);
-    } else {
-      showNotification('error', res.error || 'Failed to sync inventory');
-    }
-  } catch (error) {
-    console.error('Inventory sync error:', error);
-    showNotification('error', 'Error syncing inventory: ' + (error.message || 'Unknown error'));
+    await syncStoreOrders();
   } finally {
     // Restore button state only if elements exist
     if (btn && icon && text && desc) {
       btn.disabled = false;
       btn.style.opacity = '1';
       btn.style.cursor = 'pointer';
-      icon.className = 'fas fa-download';
+      icon.className = 'fas fa-sync-alt';
       icon.style.color = 'var(--success-color)';
-      text.textContent = 'Sync Inventory from Prokip';
-      desc.textContent = `Push Prokip inventory quantities to ${selectedStore.platform}`;
+      text.textContent = 'Sync Orders from Store';
+      desc.textContent = `Sync latest orders from ${selectedStore.platform} to Prokip`;
     }
   }
 }
@@ -1995,6 +2242,18 @@ async function pushProductsToProkip() {
   const desc = document.getElementById('pushProductsDesc');
   
   closeSyncModal();
+
+  if (!selectedStore) {
+    const fallback = getPrimaryStore();
+    if (fallback) {
+      selectedStore = { id: fallback.id, platform: fallback.platform, storeUrl: fallback.storeUrl, storeName: fallback.storeName };
+    }
+  }
+
+  if (!selectedStore) {
+    showNotification('error', 'Please select a store first');
+    return;
+  }
   
   // Show loading state only if elements exist
   if (btn && icon && text && desc) {
@@ -2009,24 +2268,27 @@ async function pushProductsToProkip() {
   }
   
   try {
-    showNotification('info', 'Pushing products from Prokip to store...');
-    const res = await apiCall('/setup/products', {
+    showNotification('info', 'Syncing products from store to Prokip...');
+    const res = await apiCall('/api/ecom/sync-products', {
       method: 'POST',
       body: JSON.stringify({
-        method: 'push',
-        connectionId: selectedStore.id
+        store_id: selectedStore.id,
+        limit: 100,
+        page: 1
       })
     });
     
-    if (res.success) {
-      showNotification('success', res.message || 'Products pushed successfully');
+    if (res.success !== false) {
+      showNotification('success', res.message || 'Products synced successfully');
+      loadEcomSyncStatus();
       setTimeout(() => viewStoreInventory(), 2000);
+      setTimeout(() => loadProkipProducts(), 2000);
     } else {
-      showNotification('error', res.error || 'Failed to push products');
+      showNotification('error', res.error || 'Failed to sync products');
     }
   } catch (error) {
-    console.error('Product push error:', error);
-    showNotification('error', 'Error pushing products: ' + (error.message || 'Unknown error'));
+    console.error('Product sync error:', error);
+    showNotification('error', 'Error syncing products: ' + (error.message || 'Unknown error'));
   } finally {
     // Restore button state only if elements exist
     if (btn && icon && text && desc) {
@@ -2035,8 +2297,119 @@ async function pushProductsToProkip() {
       btn.style.cursor = 'pointer';
       icon.className = 'fas fa-upload';
       icon.style.color = 'var(--warning-color)';
-      text.textContent = 'Push Products to Store';
-      desc.textContent = `Create Prokip products in ${selectedStore.platform}`;
+      text.textContent = 'Sync Products from Store';
+      desc.textContent = `Sync products from ${selectedStore.platform} to Prokip`;
+    }
+  }
+}
+
+async function syncOrdersFromProkip() {
+  const btn = document.getElementById('syncProkipOrdersBtn');
+  const icon = document.getElementById('syncOrdersIcon');
+  const text = document.getElementById('syncOrdersText');
+  const desc = document.getElementById('syncOrdersDesc');
+
+  closeSyncModal();
+
+  if (btn && icon && text && desc) {
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    icon.className = 'fas fa-spinner fa-spin';
+    text.textContent = 'Syncing orders to store...';
+    desc.textContent = 'Updating WooCommerce stock from Prokip sales';
+  }
+
+  try {
+    const res = await apiCall(`/api/ecom/sync-orders`, 'POST', {
+      store_id: selectedStore.id,
+      status: 'processing,completed'
+    });
+    if (res.success === false && res.error) {
+      showNotification('error', res.error || 'Failed to sync Prokip orders');
+    } else {
+      const processed = res.orders_processed ?? res.products_updated ?? 0;
+      const failed = res.orders_failed ?? res.products_failed ?? 0;
+      showNotification('success', `Prokip orders synced: ${processed} processed, ${failed} failed`);
+      if (Array.isArray(res.errors) && res.errors.length) {
+        console.warn('Sync order errors:', res.errors);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to sync orders from Prokip:', error);
+    showNotification('error', error.message || 'Failed to sync Prokip orders');
+  } finally {
+    if (btn && icon && text && desc) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      icon.className = 'fas fa-sync';
+      text.textContent = 'Sync Orders from Prokip';
+      desc.textContent = `Send Prokip sales to ${selectedStore.platform} and deduct stock`;
+    }
+  }
+}
+
+async function pushProkipProductsToStore() {
+  const btn = document.getElementById('pushToStoreBtn');
+  const icon = document.getElementById('pushToStoreIcon');
+  const text = document.getElementById('pushToStoreText');
+  const desc = document.getElementById('pushToStoreDesc');
+
+  closeSyncModal();
+
+  if (!selectedStore) {
+    const fallback = getPrimaryStore();
+    if (fallback) {
+      selectedStore = { id: fallback.id, platform: fallback.platform, storeUrl: fallback.storeUrl, storeName: fallback.storeName };
+    }
+  }
+
+  if (!selectedStore) {
+    showNotification('error', 'Please select a store first');
+    return;
+  }
+
+  if (selectedStore.platform !== 'woocommerce') {
+    showNotification('error', 'Push products is only supported for WooCommerce stores');
+    return;
+  }
+
+  if (btn && icon && text && desc) {
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    btn.style.cursor = 'not-allowed';
+    icon.className = 'fas fa-spinner fa-spin';
+    text.textContent = 'Pushing Products...';
+    desc.textContent = 'Please wait while we push products from Prokip to your store';
+  }
+
+  try {
+    showNotification('info', 'Pushing products from Prokip to store...');
+    const res = await apiCall('/api/ecom/push-products', {
+      method: 'POST',
+      body: JSON.stringify({
+        store_id: selectedStore.id,
+        limit: 100
+      })
+    });
+
+    if (res.success !== false) {
+      showNotification('success', res.message || 'Products pushed to store successfully');
+      loadEcomSyncStatus();
+      setTimeout(() => viewStoreInventory(), 1500);
+    } else {
+      showNotification('error', res.error || res.message || 'Failed to push products to store');
+    }
+  } catch (error) {
+    console.error('Push products to store error:', error);
+    showNotification('error', 'Error pushing products: ' + (error.message || 'Unknown error'));
+  } finally {
+    if (btn && icon && text && desc) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+      icon.className = 'fas fa-cloud-upload-alt';
+      text.textContent = 'Push Prokip Products to Store';
+      desc.textContent = `Create/update products in ${selectedStore.platform} from Prokip`;
     }
   }
 }
@@ -2053,14 +2426,24 @@ async function syncStoreOrders() {
     return;
   }
 
-  const confirmed = confirm('Pull orders from your WooCommerce store?\n\nThis will fetch recent orders and sync them to Prokip.');
+  const confirmed = confirm('Sync orders from your WooCommerce store?\n\nThis will fetch recent orders and sync them to Prokip.');
   if (!confirmed) return;
 
   try {
-    showNotification('info', 'Pulling orders from store...');
-    const data = await apiCall('/sync/pull-orders', 'POST');
+    showNotification('info', 'Syncing orders from store...');
+    const data = await apiCall('/api/ecom/sync-orders', {
+      method: 'POST',
+      body: JSON.stringify({
+        store_id: selectedStore.id,
+        status: 'processing,completed',
+        limit: 100,
+        page: 1
+      })
+    });
     showNotification('success', data.message || 'Orders synced successfully');
+    loadEcomSyncStatus();
     setTimeout(() => loadStoreOrders(), 2000);
+    setTimeout(() => loadProkipProducts(), 2000);
   } catch (error) {
     console.error('Order sync error:', error);
     showNotification('error', 'Error syncing orders');
@@ -2080,16 +2463,24 @@ async function syncStoreSales() {
     return;
   }
 
-  const confirmed = confirm('Pull sales from your WooCommerce store?\n\nThis will fetch recent sales and sync them to Prokip.');
+  const confirmed = confirm('Sync sales from your WooCommerce store?\n\nThis will fetch recent sales and sync them to Prokip.');
   if (!confirmed) return;
 
   try {
-    showNotification('info', 'Pulling sales from store...');
-    const data = await apiCall('/sync/pull-sales', 'POST', {
-      connectionId: selectedStore.id
+    showNotification('info', 'Syncing sales from store...');
+    const data = await apiCall('/api/ecom/sync-orders', {
+      method: 'POST',
+      body: JSON.stringify({
+        store_id: selectedStore.id,
+        status: 'processing,completed',
+        limit: 100,
+        page: 1
+      })
     });
     showNotification('success', data.message || 'Sales synced successfully');
+    loadEcomSyncStatus();
     setTimeout(() => loadStoreSales(), 2000);
+    setTimeout(() => loadProkipProducts(), 2000);
   } catch (error) {
     console.error('Sales sync error:', error);
     showNotification('error', 'Error syncing sales');
@@ -2647,7 +3038,12 @@ async function loadProkipProducts() {
     `;
 
     // Fetch products from prokip route
-    const response = await apiCall('/prokip/products', 'GET');
+    const storeIdParam = selectedStore?.id ? `?store_id=${selectedStore.id}` : '';
+    const response = await apiCall(`/prokip/products${storeIdParam}`, 'GET');
+    const prokipProductsEl = document.getElementById('prokip-products');
+    if (prokipProductsEl) {
+      prokipProductsEl.textContent = Array.isArray(response.products) ? response.products.length : '0';
+    }
 
     // Display location information
     const locationInfo = response.locationId ? 
@@ -2729,6 +3125,10 @@ async function loadProkipSales() {
 
     // Fetch sales from prokip route
     const response = await apiCall('/prokip/sales', 'GET');
+    const prokipSalesEl = document.getElementById('prokip-sales');
+    if (prokipSalesEl) {
+      prokipSalesEl.textContent = Array.isArray(response.sales) ? response.sales.length : '0';
+    }
 
     // Display location information
     const locationInfo = response.locationId ? 
@@ -2817,6 +3217,10 @@ async function loadProkipPurchases() {
 
     // Fetch purchases from prokip route
     const response = await apiCall('/prokip/purchases', 'GET');
+    const prokipPurchasesEl = document.getElementById('prokip-purchases');
+    if (prokipPurchasesEl) {
+      prokipPurchasesEl.textContent = Array.isArray(response.purchases) ? response.purchases.length : '0';
+    }
 
     // Display location information
     const locationInfo = response.locationId ? 
@@ -2887,6 +3291,23 @@ async function loadProkipPurchases() {
   }
 }
 
+function showProkipTab(tab) {
+  document.querySelectorAll('.prokip-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  document.querySelectorAll('.prokip-tab-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === `prokip-tab-${tab}`);
+  });
+
+  if (tab === 'products') {
+    loadProkipProducts();
+  } else if (tab === 'sales') {
+    loadProkipSales();
+  } else if (tab === 'purchases') {
+    loadProkipPurchases();
+  }
+}
+
 // Helper function for status badge classes
 function getStatusBadgeClass(status) {
   switch (status?.toLowerCase()) {
@@ -2941,7 +3362,7 @@ async function syncWithWooCommerce() {
   
   // Check if elements exist (might be on different page)
   if (!btn || !btnText || !spinner || !statusDiv || !statusMessage || !statusDetails) {
-    console.error('❌ Sync elements not found - make sure you are on the Prokip Operations page');
+    console.error('âŒ Sync elements not found - make sure you are on the Prokip Operations page');
     alert('Please navigate to the Prokip Operations page to use the sync feature.');
     return;
   }
@@ -2955,76 +3376,75 @@ async function syncWithWooCommerce() {
     // Show processing status
     statusDiv.style.display = 'block';
     statusDiv.className = 'sync-status processing';
-    statusMessage.textContent = 'Syncing WooCommerce and Prokip...';
+    statusMessage.textContent = 'Syncing WooCommerce orders to Prokip...';
     statusDetails.textContent = 'This may take a few moments. Please don\'t close this page.';
     
-    console.log('🔄 Starting WooCommerce bidirectional sync...');
+    console.log('ðŸ”„ Starting WooCommerce â†’ Prokip sync...');
     
-    // Call the bidirectional sync API
-    const response = await fetch(`${API_BASE_URL}/bidirectional-sync/sync-woocommerce`, {
+    const store = getPrimaryStore();
+    if (!store) {
+      statusDiv.className = 'sync-status error';
+      statusMessage.textContent = 'âŒ No Store Selected';
+      statusDetails.textContent = 'Please connect and select a store before syncing.';
+      return;
+    }
+
+    const result = await apiCall('/api/ecom/sync-orders', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
+      body: JSON.stringify({
+        store_id: store.id,
+        status: 'processing,completed',
+        limit: 100,
+        page: 1
+      })
     });
     
-    const result = await response.json();
-    
-    if (response.ok && result.success) {
+    if (result && result.success !== false) {
       // Success state
       statusDiv.className = 'sync-status success';
-      statusMessage.textContent = '✅ Sync Completed Successfully!';
+      statusMessage.textContent = 'âœ… Sync Completed Successfully!';
       
-      const { results } = result;
       const details = [];
-      
-      if (results.wooToProkip) {
-        details.push(`WooCommerce → Prokip: ${results.wooToProkip.success}/${results.wooToProkip.processed} orders synced`);
-        if (results.wooToProkip.stockDeducted) {
-          details.push(`${results.wooToProkip.stockDeducted} items deducted`);
-        }
-        if (results.wooToProkip.errors.length > 0) {
-          details.push(`${results.wooToProkip.errors.length} errors`);
-        }
+      if (result.orders_processed !== undefined) {
+        details.push(`Orders processed: ${result.orders_processed}`);
       }
-      
-      if (results.prokipToWoo) {
-        details.push(`Prokip → WooCommerce: ${results.prokipToWoo.success}/${results.prokipToWoo.processed} sales synced`);
-        if (results.prokipToWoo.stockUpdated) {
-          details.push(`${results.prokipToWoo.stockUpdated} items updated`);
-        }
-        if (results.prokipToWoo.errors.length > 0) {
-          details.push(`${results.prokipToWoo.errors.length} errors`);
-        }
+      if (result.orders_skipped !== undefined) {
+        details.push(`Orders skipped: ${result.orders_skipped}`);
       }
-      
-      statusDetails.textContent = details.join(' | ');
+      if (result.orders_failed !== undefined) {
+        details.push(`Orders failed: ${result.orders_failed}`);
+      }
+      if (result.orders_found !== undefined) {
+        details.push(`Orders found: ${result.orders_found}`);
+      }
+      statusDetails.textContent = details.length ? details.join(' | ') : (result.message || 'Sync completed');
       
       // Refresh dashboard data
       setTimeout(() => {
         loadDashboardData();
+        loadEcomSyncStatus();
+        loadProkipProducts();
       }, 2000);
       
-      console.log('✅ Sync completed:', result);
+      console.log('âœ… Sync completed:', result);
       
     } else {
       // Error state
       statusDiv.className = 'sync-status error';
-      statusMessage.textContent = '❌ Sync Failed';
-      statusDetails.textContent = result.error || 'An unexpected error occurred during sync';
+      statusMessage.textContent = 'âŒ Sync Failed';
+      statusDetails.textContent = result?.error || 'An unexpected error occurred during sync';
       
-      console.error('❌ Sync failed:', result);
+      console.error('âŒ Sync failed:', result);
     }
     
   } catch (error) {
     // Network/error state
     statusDiv.style.display = 'block';
     statusDiv.className = 'sync-status error';
-    statusMessage.textContent = '❌ Connection Error';
+    statusMessage.textContent = 'âŒ Connection Error';
     statusDetails.textContent = error.message || 'Failed to connect to the server. Please check your connection.';
     
-    console.error('❌ Sync error:', error);
+    console.error('âŒ Sync error:', error);
     
   } finally {
     // Reset button state
@@ -3040,3 +3460,6 @@ async function syncWithWooCommerce() {
     }
   }
 }
+
+
+
