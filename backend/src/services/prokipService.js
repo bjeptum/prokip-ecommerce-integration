@@ -34,6 +34,7 @@ async function resolveApiBase(userId = null) {
 
 async function authenticateUser(username, password) {
   try {
+    const oauthBase = getEnvApiBase();
     const formData = new URLSearchParams();
     formData.append('username', username);
     formData.append('email', username); // some Prokip instances expect email field
@@ -45,7 +46,7 @@ async function authenticateUser(username, password) {
     formData.append('granttype', 'password');
     formData.append('scope', '');
 
-  const response = await axios.post(`${process.env.PROKIP_API}/oauth/token`, formData, {
+    const response = await axios.post(`${oauthBase}/oauth/token`, formData, {
       headers: { 
         'Content-Type': 'application/x-www-form-urlencoded',
         'Accept': 'application/json'
@@ -69,21 +70,29 @@ async function authenticateUser(username, password) {
       throw new Error('Invalid Prokip credentials. Please check your email and password.');
     }
     if (error.response?.status === 400) {
+      const oauthError = error.response?.data?.error;
+      if (oauthError === 'invalid_client') {
+        throw new Error('Invalid Prokip OAuth client configuration. Check PROKIP_CLIENT_ID and PROKIP_CLIENT_SECRET.');
+      }
+      if (oauthError === 'invalid_grant') {
+        throw new Error('Invalid Prokip credentials. Please check your username/email and password.');
+      }
       const msg = error.response?.data?.message || error.response?.data?.error_description || 'Invalid request format';
-      throw new Error(`Bad request: ${msg}. Please check your credentials.`);
+      throw new Error(`Bad request: ${msg}.`);
     }
     throw new Error(error.response?.data?.message || error.response?.data?.error_description || error.message || 'Authentication failed. Please check your credentials.');
   }
 }
 
 async function refreshAccessToken(refreshToken) {
+  const oauthBase = getEnvApiBase();
   const formData = new URLSearchParams();
   formData.append('grant_type', 'refresh_token');
   formData.append('refresh_token', refreshToken);
   formData.append('client_id', process.env.PROKIP_CLIENT_ID || '6');
   formData.append('client_secret', process.env.PROKIP_CLIENT_SECRET || '');
 
-  const response = await axios.post(`${process.env.PROKIP_API}/oauth/token`, formData, {
+  const response = await axios.post(`${oauthBase}/oauth/token`, formData, {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
   });
 
@@ -112,7 +121,7 @@ async function saveProkipConfig(data, userId = 1) {
         token: access_token,
         refreshToken: refresh_token || null,
         expiresAt,
-        apiUrl: process.env.PROKIP_API,
+        apiUrl: getEnvApiBase(),
         locationId: locationId?.toString() || '',
         userId
       }

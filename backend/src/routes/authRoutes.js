@@ -180,9 +180,13 @@ router.post('/prokip-login', [
     }
 
     // Store Prokip config using OAuth token
+    const defaultApiUrl =
+      process.env.PROKIP_API ||
+      process.env.PROKIP_BASE_URL ||
+      'https://api.prokip.africa';
     const apiUrl = (useLocalProkip && usedLocal)
-      ? (process.env.PROKIP_BASE_URL || process.env.PROKIP_API)
-      : process.env.PROKIP_API;
+      ? (process.env.PROKIP_BASE_URL || defaultApiUrl)
+      : defaultApiUrl;
 
     await prisma.prokipConfig.upsert({
       where: { userId: user.id },
