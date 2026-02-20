@@ -245,9 +245,22 @@ router.post('/prokip-login', [
     console.error('   Error status:', error.response?.status);
     console.error('   Error code:', error.code);
     
-    res.status(400).json({ 
-      error: error.message || 'Invalid Prokip credentials. Please check your email and password.',
-      message: error.message,
+    const msg = error.message || '';
+    const upstreamStatus = error.response?.status;
+    let status = 500;
+
+    if (msg.includes('Invalid Prokip credentials')) {
+      status = 401;
+    } else if (msg.includes('Invalid Prokip OAuth client configuration')) {
+      status = 500;
+    } else if (upstreamStatus && upstreamStatus >= 400 && upstreamStatus < 500) {
+      status = 400;
+    }
+
+    res.status(status).json({
+      error: msg || 'Prokip login failed.',
+      message: msg || 'Prokip login failed.',
+      upstreamStatus: upstreamStatus || null,
       details: error.response?.data || null
     });
   }

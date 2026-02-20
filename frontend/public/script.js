@@ -268,7 +268,13 @@ async function loginLocal() {
       body: JSON.stringify({ username, password })
     });
 
-    const data = await res.json();
+    let data = {};
+    const responseText = await res.text();
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      data = { error: responseText || 'Unexpected response from server' };
+    }
 
     if (res.ok && data.token) {
       token = data.token;
@@ -352,9 +358,17 @@ async function connectProkip() {
         document.getElementById('prokip-login-error').textContent = 'No business locations found for this account.';
       }
     } else {
-      document.getElementById('prokip-login-error').textContent = data.error || 'Prokip login failed. Please check your credentials.';
+      const detailMessage =
+        data.error ||
+        data.message ||
+        data.details?.error_description ||
+        data.details?.message ||
+        `Prokip login failed (HTTP ${res.status}).`;
+      console.error('Prokip login failed:', { status: res.status, data });
+      document.getElementById('prokip-login-error').textContent = detailMessage;
     }
   } catch (error) {
+    console.error('Prokip login network error:', error);
     document.getElementById('prokip-login-error').textContent = 'Could not connect to server. Please check your connection.';
   } finally {
     if (loginBtn) loginBtn.disabled = false;
